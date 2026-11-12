@@ -1,0 +1,6 @@
+{
+  "name": "NextGen PDF Studio",
+  "description": "Professional Windows desktop-grade PDF suite featuring advanced PDF Reader, Editor with annotations and signatures, Document Converter, Local OCR, and PDF Tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
