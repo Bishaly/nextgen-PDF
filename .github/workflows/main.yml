@@ -32,7 +32,7 @@ jobs:
           node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('package.json','utf8')); if(!fs.existsSync('build/icon.ico')) { delete p.build.win.icon; delete p.build.nsis.installerIcon; delete p.build.nsis.uninstallerIcon; delete p.build.portable.splashImage; p.build.files=p.build.files.filter(x=>x!=='build/icon.*'); fs.writeFileSync('package.json',JSON.stringify(p,null,2)); console.log('Using default application icon'); }"
 
       - name: Build Windows EXE
-        run: npm run dist:win
+        run: npm run dist:win -- --publish never
 
       - name: Upload Windows EXE
         uses: actions/upload-artifact@v4
