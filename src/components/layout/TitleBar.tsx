@@ -1,6 +1,5 @@
 import React from 'react';
 import { 
-  FileText, 
   Save, 
   Printer, 
   Maximize2, 
@@ -18,7 +17,8 @@ import {
   Minus,
   Square,
   Copy,
-  X
+  X,
+  FileDown
 } from 'lucide-react';
 import { DocumentInfo } from '../../types/pdf';
 import { desktopBridge } from '../../services/desktopBridge';
@@ -29,6 +29,7 @@ interface TitleBarProps {
   onToggleTheme: () => void;
   onOpenFile: () => void;
   onSaveFile: () => void;
+  onSaveAs?: () => void;
   onPrint: () => void;
   onOpenSample: () => void;
   isFullscreen: boolean;
@@ -48,6 +49,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onToggleTheme,
   onOpenFile,
   onSaveFile,
+  onSaveAs,
   onPrint,
   onOpenSample,
   isFullscreen,
@@ -81,9 +83,12 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       {/* Zone 1: Brand & Quick Action Strip */}
       <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as any}>
         <div className="flex items-center gap-2 mr-2">
-          <div className="w-6 h-6 rounded bg-gradient-to-br from-red-600 to-rose-700 flex items-center justify-center text-white shadow-xs">
-            <FileText className="w-3.5 h-3.5" />
-          </div>
+          <img
+            src="./assets/aistudio/ChatGPT_Image_Nov_14__2026__03_03_43_PM_22acb7f7.png"
+            alt="NextGen PDF Studio"
+            className="w-6 h-6 rounded-md object-contain shadow-xs shrink-0"
+            draggable={false}
+          />
           <span className="font-bold text-neutral-900 dark:text-neutral-100 text-sm tracking-tight whitespace-nowrap">
             NextGen PDF Studio
           </span>
@@ -120,6 +125,15 @@ export const TitleBar: React.FC<TitleBarProps> = ({
                   <span className="absolute top-1 right-1 w-1.5 h-1.5 bg-amber-500 rounded-full" />
                 )}
               </button>
+              {onSaveAs && (
+                <button
+                  onClick={onSaveAs}
+                  title="Save As New PDF File (Ctrl+Shift+S)"
+                  className="p-1.5 text-neutral-600 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded transition-colors"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button
                 onClick={onPrint}
                 title="Print Document (Ctrl+P)"

@@ -38,7 +38,9 @@ import {
   Palette,
   FolderOpen,
   Undo2,
-  Redo2
+  Redo2,
+  FilePenLine,
+  FileDown
 } from 'lucide-react';
 import { MainTab, ToolMode } from '../../types/pdf';
 
@@ -63,6 +65,7 @@ interface RibbonBarProps {
   onStrokeWidthChange: (w: number) => void;
   onOpenFile: () => void;
   onDownload: () => void;
+  onSaveAs?: () => void;
   onPrint: () => void;
   onOpenSignatureModal: () => void;
   onOpenWatermarkModal: () => void;
@@ -116,6 +119,7 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
   onStrokeWidthChange,
   onOpenFile,
   onDownload,
+  onSaveAs,
   onPrint,
   onOpenSignatureModal,
   onOpenWatermarkModal,
@@ -233,6 +237,19 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
                 <Hand className="w-4 h-4" />
                 <span className="text-[10px]">Hand</span>
               </button>
+              <button
+                onClick={() => onSelectToolMode('edit-text')}
+                disabled={!hasDocument}
+                className={`p-2 rounded flex flex-col items-center gap-0.5 min-w-[56px] transition-colors ${
+                  toolMode === 'edit-text'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40'
+                } disabled:opacity-40`}
+                title="Edit Existing PDF Text (Select, Modify, Delete, Reflow)"
+              >
+                <FilePenLine className="w-4 h-4" />
+                <span className="text-[10px] font-semibold">Edit Text</span>
+              </button>
             </div>
 
             {/* Group 3: Zoom Controls */}
@@ -309,12 +326,23 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
               <button
                 onClick={onDownload}
                 disabled={!hasDocument}
-                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5 shadow-xs ml-1"
-                title="Download PDF"
+                className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white font-medium flex items-center gap-1.5 shadow-xs ml-1 disabled:opacity-40"
+                title="Save Modified PDF (Ctrl+S)"
               >
                 <Download className="w-3.5 h-3.5" />
-                <span>Save / Download</span>
+                <span>Save</span>
               </button>
+              {onSaveAs && (
+                <button
+                  onClick={onSaveAs}
+                  disabled={!hasDocument}
+                  className="px-2.5 py-1.5 rounded bg-neutral-200/80 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-800 dark:text-neutral-200 font-medium flex items-center gap-1 disabled:opacity-40"
+                  title="Save As New PDF File (Ctrl+Shift+S)"
+                >
+                  <FileDown className="w-3.5 h-3.5" />
+                  <span>Save As</span>
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -322,19 +350,33 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
         {/* ================= EDIT TAB ================= */}
         {activeTab === 'edit' && (
           <div className="flex items-center gap-3">
-            {/* Annotation Tools */}
+            {/* Existing PDF Text Editor + Annotation Tools */}
             <div className="flex items-center gap-1 pr-3 border-r border-neutral-200 dark:border-neutral-700">
               <button
+                onClick={() => onSelectToolMode('edit-text')}
+                disabled={!hasDocument}
+                className={`p-2 rounded flex flex-col items-center gap-0.5 min-w-[58px] transition-colors ${
+                  toolMode === 'edit-text'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-950/40'
+                } disabled:opacity-40`}
+                title="Edit Existing PDF Text (Select, Modify, Delete, Add & Format)"
+              >
+                <FilePenLine className="w-4 h-4" />
+                <span className="text-[10px] font-semibold">Edit Text</span>
+              </button>
+
+              <button
                 onClick={() => onSelectToolMode('text')}
-                className={`p-2 rounded flex flex-col items-center gap-0.5 min-w-[44px] transition-colors ${
+                className={`p-2 rounded flex flex-col items-center gap-0.5 min-w-[50px] transition-colors ${
                   toolMode === 'text'
                     ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300'
                     : 'text-neutral-700 dark:text-neutral-300 hover:bg-neutral-200 dark:hover:bg-neutral-700'
                 }`}
-                title="Add Text (Click on page to place)"
+                title="Add Text Annotation Overlay"
               >
                 <Type className="w-4 h-4" />
-                <span className="text-[10px]">Text</span>
+                <span className="text-[10px]">Add Note</span>
               </button>
 
               <button

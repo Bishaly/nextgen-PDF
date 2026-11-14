@@ -1,6 +1,7 @@
 export type ToolMode = 
   | 'select' 
   | 'hand' 
+  | 'edit-text'
   | 'text' 
   | 'highlight' 
   | 'underline' 
@@ -16,6 +17,74 @@ export type ToolMode =
   | 'erase';
 
 export type MainTab = 'read' | 'edit' | 'convert' | 'tools' | 'ocr' | 'pages';
+
+export type TextAlignment = 'left' | 'center' | 'right' | 'justify';
+export type EditableFontFamily = 'Helvetica' | 'Times-Roman' | 'Courier';
+
+export interface TextRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PdfTextSpanInfo {
+  id: string;
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontName: string;
+  fontFamily: EditableFontFamily;
+  fontSize: number;
+  isBold: boolean;
+  isItalic: boolean;
+  isCustomFont: boolean;
+  color: string;
+}
+
+export interface EditableTextBlock {
+  id: string;
+  page: number; // 1-based
+  source: 'existing' | 'new';
+  origX: number;
+  origY: number;
+  origWidth: number;
+  origHeight: number;
+  origText: string;
+  origRects: TextRect[];
+  origFontName: string;
+  isCustomFont: boolean;
+
+  text: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  fontSize: number;
+  fontFamily: EditableFontFamily;
+  isBold: boolean;
+  isItalic: boolean;
+  color: string;
+  align: TextAlignment;
+  lineHeight: number;
+  baselineRatio?: number;
+  isDeleted: boolean;
+  isModified: boolean;
+}
+
+export interface PageEditDiagnostics {
+  page: number;
+  status: 'editable' | 'scanned' | 'outlined' | 'encrypted' | 'mixed' | 'empty';
+  textSpanCount: number;
+  blockCount: number;
+  imageCount: number;
+  vectorPathCount: number;
+  customFontNames: string[];
+  hasPermissionsIssue: boolean;
+  message: string;
+}
 
 export interface Point {
   x: number;

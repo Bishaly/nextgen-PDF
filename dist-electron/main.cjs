@@ -50,6 +50,11 @@ function createApplicationMenu(mainWindow2) {
           click: () => sendAction("save")
         },
         {
+          label: "Save &As...",
+          accelerator: "CmdOrCtrl+Shift+S",
+          click: () => sendAction("save-as")
+        },
+        {
           label: "&Print...",
           accelerator: "CmdOrCtrl+P",
           click: () => sendAction("print")

@@ -10,12 +10,11 @@
         "@vitejs/plugin-react": "^6.1.1",
         "docx": "^9.15.3",
         "dotenv": "^17.2.3",
-        "electron": "^45.3.1",
-        "electron-builder": "^26.18.0",
         "express": "^4.21.2",
         "idb-keyval": "^6.3.0",
         "lucide-react": "^0.546.0",
         "motion": "^12.23.24",
+        "mupdf": "^1.28.6",
         "pdf-lib": "^1.17.1",
         "pdfjs-dist": "^4.10.38",
         "react": "^19.0.1",
@@ -30,6 +29,8 @@
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
         "autoprefixer": "^10.4.21",
+        "electron": "^45.3.1",
+        "electron-builder": "^26.18.0",
         "esbuild": "^0.25.0",
         "tailwindcss": "^4.3.3",
         "tsx": "^4.21.0",
@@ -765,6 +766,8 @@
     "motion-utils": ["motion-utils@12.39.0", "", {}, "sha512-8nadJAJjTtqRkmRF36FoJTrywK9nnFmnPwnSMyxaOCU7GDjN9RTMJIxx9De8ErM+vpPhMccr/6fo5WciyQLnMQ=="],
 
     "ms": ["ms@2.0.0", "", {}, "sha512-Tpp60P6IUJDTuOq/5Z8cdskzJujfwqfOTkrwIwj7IRISpnkJnT6SyJ4PCPnGMoFjC9ddhal5KVIYtAt97ix05A=="],
+
+    "mupdf": ["mupdf@1.28.6", "", {}, "sha512-LsNqk3a9TNJGjJKWVOUK1YMlWJNxFh8bIf+SSxGI+A+WXDlkwc4R2PW/n1qINb4YpqZfOazjPdRqw95WpmCrfw=="],
 
     "nanoid": ["nanoid@6.0.2", "", { "bin": { "nanoid": "bin/nanoid.js" } }, "sha512-hIvVOb9Qr1p/9CNNLOe0OlWvgx/ziTsVwKN/GDSsuArN2K0wDiafP3s0SWmsm7o2BdnyS8Z9Z64NFBUbn6ziBg=="],
 

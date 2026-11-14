@@ -15,8 +15,9 @@ import {
   Italic,
   Type
 } from 'lucide-react';
-import { Annotation, ToolMode, Point } from '../../types/pdf';
+import { Annotation, EditableTextBlock, ToolMode, Point } from '../../types/pdf';
 import { pdfEngine } from '../../services/pdfEngine';
+import { PdfTextEditorLayer } from '../editor/PdfTextEditorLayer';
 
 interface DocumentViewerProps {
   docProxy: any;
@@ -38,6 +39,15 @@ interface DocumentViewerProps {
   onConsumeSignature: () => void;
   activeImageData?: string | null;
   onConsumeImage?: () => void;
+  editableBlocks?: EditableTextBlock[];
+  selectedTextBlockId?: string | null;
+  editingTextBlockId?: string | null;
+  onSelectTextBlock?: (id: string | null) => void;
+  onStartEditingTextBlock?: (id: string | null) => void;
+  onUpdateTextBlock?: (block: EditableTextBlock, recordHistory?: boolean) => void;
+  onCommitTextBlockDragHistory?: (beforeBlock: EditableTextBlock) => void;
+  onDeleteTextBlock?: (id: string) => void;
+  onCreateNewTextBlockAt?: (x: number, y: number) => void;
 }
 
 export const DocumentViewer: React.FC<DocumentViewerProps> = ({
@@ -60,6 +70,15 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
   onConsumeSignature,
   activeImageData,
   onConsumeImage,
+  editableBlocks = [],
+  selectedTextBlockId = null,
+  editingTextBlockId = null,
+  onSelectTextBlock,
+  onStartEditingTextBlock,
+  onUpdateTextBlock,
+  onCommitTextBlockDragHistory,
+  onDeleteTextBlock,
+  onCreateNewTextBlockAt,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -405,6 +424,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
 
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return; // Left click only
+    if (toolMode === 'edit-text') return; // Handled natively by PdfTextEditorLayer
 
     if (toolMode === 'hand') {
       setIsPanning(true);
@@ -725,6 +745,32 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({
             ref={overlayRef}
             className="absolute top-0 left-0 w-full h-full pointer-events-none z-10"
           />
+
+          {/* Existing PDF Text Editing Layer (PDF.js TextLayer + Interactive Move/Resize/Edit) */}
+          {toolMode === 'edit-text' &&
+            onSelectTextBlock &&
+            onStartEditingTextBlock &&
+            onUpdateTextBlock &&
+            onCommitTextBlockDragHistory &&
+            onDeleteTextBlock &&
+            onCreateNewTextBlockAt && (
+              <PdfTextEditorLayer
+                docProxy={docProxy}
+                baseCanvasRef={canvasRef}
+                currentPage={currentPage}
+                zoom={zoom}
+                rotation={rotation}
+                blocks={editableBlocks}
+                selectedBlockId={selectedTextBlockId}
+                editingBlockId={editingTextBlockId}
+                onSelectBlock={onSelectTextBlock}
+                onStartEditingBlock={onStartEditingTextBlock}
+                onUpdateBlock={onUpdateTextBlock}
+                onCommitBlockDragHistory={onCommitTextBlockDragHistory}
+                onDeleteBlock={onDeleteTextBlock}
+                onCreateNewBlockAt={onCreateNewTextBlockAt}
+              />
+            )}
 
           {/* Inline Text Creation Input with Rich Styling */}
           {newTextInput && (

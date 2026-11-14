@@ -62,7 +62,15 @@ export const HomeWelcomeView: React.FC<HomeWelcomeViewProps> = ({
     >
       <div className="max-w-5xl mx-auto w-full space-y-8">
         {/* Hero Section */}
-        <div className="text-center space-y-2 pt-4">
+        <div className="text-center space-y-2.5 pt-4">
+          <div className="flex justify-center mb-1">
+            <img
+              src="./assets/aistudio/ChatGPT_Image_Nov_14__2026__03_03_43_PM_22acb7f7.png"
+              alt="NextGen PDF Studio Icon"
+              className="w-16 h-16 rounded-2xl object-contain shadow-md"
+              draggable={false}
+            />
+          </div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/50 border border-blue-200 dark:border-blue-900/40 text-blue-700 dark:text-blue-300 text-xs font-medium">
             <ShieldCheck className="w-3.5 h-3.5" />
             <span>100% Client-Side Privacy — Documents Never Leave Your Device</span>

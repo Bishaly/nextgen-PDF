@@ -22,10 +22,23 @@ import { HelpModal } from './components/modals/HelpModal';
 import { PasswordPromptModal } from './components/modals/PasswordPromptModal';
 import { PageOrganizerView } from './components/tools/PageOrganizerView';
 import { SettingsModal } from './components/modals/SettingsModal';
+import { EditTextToolbar } from './components/editor/EditTextToolbar';
 
-import { DocumentInfo, MainTab, ToolMode, Annotation, BookmarkItem, RecentFile, SearchMatch } from './types/pdf';
+import {
+  DocumentInfo,
+  MainTab,
+  ToolMode,
+  Annotation,
+  BookmarkItem,
+  RecentFile,
+  EditableTextBlock,
+  EditableFontFamily,
+  PageEditDiagnostics,
+  TextAlignment,
+} from './types/pdf';
 import { pdfEngine } from './services/pdfEngine';
 import { pdfEditorService } from './services/pdfEditorService';
+import { pdfTextEditEngine } from './services/pdfTextEditEngine';
 import { storageService } from './services/storageService';
 import { createSampleReportPdf } from './services/samplePdfs';
 import { desktopBridge } from './services/desktopBridge';
@@ -48,10 +61,38 @@ export default function App() {
   const [zoom, setZoom] = useState(1.0);
   const [rotation, setRotation] = useState(0);
 
-  // Annotations & Sidebar State
+  // Annotations & Existing-PDF Text Editing State (Unified Undo/Redo)
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
-  const [undoStack, setUndoStack] = useState<Annotation[][]>([]);
-  const [redoStack, setRedoStack] = useState<Annotation[][]>([]);
+  const [editableBlocks, setEditableBlocks] = useState<EditableTextBlock[]>([]);
+  const [analyzedPages, setAnalyzedPages] = useState<Record<number, PageEditDiagnostics>>({});
+  const [isAnalyzingPageText, setIsAnalyzingPageText] = useState(false);
+  const [isCommittingTextEdits, setIsCommittingTextEdits] = useState(false);
+  const [selectedTextBlockId, setSelectedTextBlockId] = useState<string | null>(null);
+  const [editingTextBlockId, setEditingTextBlockId] = useState<string | null>(null);
+  const [textEditorStyle, setTextEditorStyle] = useState<{
+    fontFamily: EditableFontFamily;
+    fontSize: number;
+    isBold: boolean;
+    isItalic: boolean;
+    color: string;
+    align: TextAlignment;
+  }>({
+    fontFamily: 'Helvetica',
+    fontSize: 12,
+    isBold: false,
+    isItalic: false,
+    color: '#000000',
+    align: 'left',
+  });
+
+  const [undoStack, setUndoStack] = useState<
+    Array<{ annotations: Annotation[]; editableBlocks: EditableTextBlock[] }>
+  >([]);
+  const [redoStack, setRedoStack] = useState<
+    Array<{ annotations: Annotation[]; editableBlocks: EditableTextBlock[] }>
+  >([]);
+  const lastTypedBlockRef = useRef<string | null>(null);
+
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
@@ -120,31 +161,47 @@ export default function App() {
   };
 
   // Helper to load document bytes into PDF.js and state
-  const loadPdfBytes = useCallback(async (data: Uint8Array, fileName: string, password?: string) => {
-    try {
-      const proxy = await pdfEngine.loadDocument(data, password);
-      setDocProxy(proxy);
+  const loadPdfBytes = useCallback(
+    async (
+      data: Uint8Array,
+      fileName: string,
+      password?: string,
+      options?: { preserveToolAndPage?: number }
+    ) => {
+      try {
+        const proxy = await pdfEngine.loadDocument(data, password);
+        setDocProxy(proxy);
 
-      const docId = `${fileName}_${Date.now()}`;
-      const info: DocumentInfo = {
-        id: docId,
-        name: fileName,
-        size: data.byteLength,
-        pageCount: proxy.numPages,
-        data,
-        lastModified: Date.now(),
-      };
+        const docId = `${fileName}_${Date.now()}`;
+        const info: DocumentInfo = {
+          id: docId,
+          name: fileName,
+          size: data.byteLength,
+          pageCount: proxy.numPages,
+          data,
+          lastModified: Date.now(),
+        };
 
-      setDocumentInfo(info);
-      setCurrentPage(1);
-      setRotation(0);
-      setZoom(1.0);
-      setAnnotations([]);
-      setUndoStack([]);
-      setRedoStack([]);
-      setHasUnsavedChanges(false);
-      setPasswordPrompt(null);
-      setActiveTab('read');
+        setDocumentInfo(info);
+        setCurrentPage(
+          options?.preserveToolAndPage
+            ? Math.min(options.preserveToolAndPage, proxy.numPages)
+            : 1
+        );
+        setRotation(0);
+        if (!options?.preserveToolAndPage) {
+          setZoom(1.0);
+          setActiveTab('read');
+        }
+        setAnnotations([]);
+        setEditableBlocks([]);
+        setAnalyzedPages({});
+        setSelectedTextBlockId(null);
+        setEditingTextBlockId(null);
+        setUndoStack([]);
+        setRedoStack([]);
+        setHasUnsavedChanges(false);
+        setPasswordPrompt(null);
 
       // Load bookmarks
       const outline = await pdfEngine.getBookmarks(proxy);
@@ -234,24 +291,67 @@ export default function App() {
     setRecentFiles((prev) => prev.filter((f) => f.id !== id));
   };
 
-  // Annotations management with Undo / Redo history
+  // Automatically analyze current PDF page text & fonts when Edit Text tool is active
+  useEffect(() => {
+    if (toolMode !== 'edit-text' || !docProxy || !documentInfo) return;
+    if (analyzedPages[currentPage]) return;
+
+    let cancelled = false;
+    setIsAnalyzingPageText(true);
+
+    pdfTextEditEngine
+      .analyzeAndExtractPageText(documentInfo.data, docProxy, currentPage)
+      .then(({ blocks, diagnostics }) => {
+        if (cancelled) return;
+        setAnalyzedPages((prev) => ({ ...prev, [currentPage]: diagnostics }));
+        setEditableBlocks((prev) => {
+          const existingOtherPages = prev.filter((b) => b.page !== currentPage);
+          const newOnCurrent = prev.filter((b) => b.page === currentPage && b.source === 'new');
+          return [...existingOtherPages, ...blocks, ...newOnCurrent];
+        });
+      })
+      .catch((err) => {
+        console.error('Failed to analyze PDF page text', err);
+      })
+      .finally(() => {
+        if (!cancelled) setIsAnalyzingPageText(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [toolMode, docProxy, documentInfo, currentPage, analyzedPages]);
+
+  // Helper to push unified Undo history snapshot
+  const pushHistorySnapshot = useCallback(
+    (snapAnnotations = annotations, snapBlocks = editableBlocks) => {
+      setUndoStack((prev) => [
+        ...prev.slice(-49),
+        {
+          annotations: snapAnnotations.map((a) => ({ ...a })),
+          editableBlocks: snapBlocks.map((b) => ({ ...b })),
+        },
+      ]);
+      setRedoStack([]);
+    },
+    [annotations, editableBlocks]
+  );
+
+  // Annotations management with unified Undo / Redo history
   const handleAddAnnotation = (anno: Annotation) => {
-    setUndoStack((prev) => [...prev, annotations]);
-    setRedoStack([]);
+    pushHistorySnapshot();
     setAnnotations((prev) => [...prev, anno]);
     setHasUnsavedChanges(true);
   };
 
   const handleUpdateAnnotation = (anno: Annotation) => {
-    setUndoStack((prev) => [...prev, annotations]);
-    setRedoStack([]);
+    pushHistorySnapshot();
     setAnnotations((prev) => prev.map((a) => (a.id === anno.id ? anno : a)));
     setHasUnsavedChanges(true);
   };
 
   const handleDeleteAnnotation = (id: string) => {
-    setUndoStack((prev) => [...prev, annotations]);
-    setRedoStack([]);
+    pushHistorySnapshot();
     setAnnotations((prev) => prev.filter((a) => a.id !== id));
     if (activeAnnotationId === id) setActiveAnnotationId(null);
     setHasUnsavedChanges(true);
@@ -259,31 +359,170 @@ export default function App() {
 
   const handleClearAnnotations = () => {
     if (confirm('Clear all annotations on this page?')) {
-      setUndoStack((prev) => [...prev, annotations]);
-      setRedoStack([]);
+      pushHistorySnapshot();
       setAnnotations((prev) => prev.filter((a) => a.page !== currentPage));
       setActiveAnnotationId(null);
       setHasUnsavedChanges(true);
     }
   };
 
+  // Existing PDF Text Editing handlers
+  const handleStartEditingTextBlock = (id: string | null) => {
+    if (!id) {
+      lastTypedBlockRef.current = null;
+    }
+    setEditingTextBlockId(id);
+  };
+
+  const handleUpdateTextBlock = useCallback(
+    (updated: EditableTextBlock, recordHistory = true) => {
+      if (recordHistory && lastTypedBlockRef.current !== updated.id) {
+        pushHistorySnapshot();
+        lastTypedBlockRef.current = updated.id;
+      }
+      setEditableBlocks((prev) => prev.map((b) => (b.id === updated.id ? updated : b)));
+      setHasUnsavedChanges(true);
+    },
+    [pushHistorySnapshot]
+  );
+
+  const handleCommitTextBlockDragHistory = useCallback(
+    (beforeBlock: EditableTextBlock) => {
+      const current = editableBlocks.find((b) => b.id === beforeBlock.id);
+      if (
+        current &&
+        (current.x !== beforeBlock.x ||
+          current.y !== beforeBlock.y ||
+          current.width !== beforeBlock.width ||
+          current.height !== beforeBlock.height)
+      ) {
+        const prevSnapshot = editableBlocks.map((b) =>
+          b.id === beforeBlock.id ? beforeBlock : { ...b }
+        );
+        pushHistorySnapshot(annotations, prevSnapshot);
+      }
+    },
+    [editableBlocks, annotations, pushHistorySnapshot]
+  );
+
+  const handleDeleteTextBlock = useCallback(
+    (id: string) => {
+      const target = editableBlocks.find((b) => b.id === id);
+      if (!target) return;
+      pushHistorySnapshot();
+      if (target.source === 'new') {
+        setEditableBlocks((prev) => prev.filter((b) => b.id !== id));
+      } else {
+        setEditableBlocks((prev) =>
+          prev.map((b) => (b.id === id ? { ...b, isDeleted: true, isModified: true } : b))
+        );
+      }
+      if (selectedTextBlockId === id) setSelectedTextBlockId(null);
+      if (editingTextBlockId === id) setEditingTextBlockId(null);
+      setHasUnsavedChanges(true);
+    },
+    [editableBlocks, pushHistorySnapshot, selectedTextBlockId, editingTextBlockId]
+  );
+
+  const handleCreateNewTextBlockAt = useCallback(
+    (x: number, y: number) => {
+      pushHistorySnapshot();
+      const newId = `new_txt_${Date.now()}`;
+      const newBlock: EditableTextBlock = {
+        id: newId,
+        page: currentPage,
+        source: 'new',
+        origX: x,
+        origY: y,
+        origWidth: 200,
+        origHeight: textEditorStyle.fontSize * 1.5,
+        origText: '',
+        origRects: [],
+        origFontName: textEditorStyle.fontFamily,
+        isCustomFont: false,
+        text: 'New PDF Text',
+        x: Math.max(10, x),
+        y: Math.max(10, y),
+        width: 220,
+        height: Math.max(24, textEditorStyle.fontSize * 1.6),
+        fontSize: textEditorStyle.fontSize,
+        fontFamily: textEditorStyle.fontFamily,
+        isBold: textEditorStyle.isBold,
+        isItalic: textEditorStyle.isItalic,
+        color: textEditorStyle.color,
+        align: textEditorStyle.align,
+        lineHeight: 1.25,
+        isDeleted: false,
+        isModified: true,
+      };
+      setEditableBlocks((prev) => [...prev, newBlock]);
+      setSelectedTextBlockId(newId);
+      setEditingTextBlockId(newId);
+      lastTypedBlockRef.current = newId;
+      setHasUnsavedChanges(true);
+    },
+    [currentPage, textEditorStyle, pushHistorySnapshot]
+  );
+
+  const handleUpdateSelectedTextStyle = (patch: {
+    fontFamily?: EditableFontFamily;
+    fontSize?: number;
+    isBold?: boolean;
+    isItalic?: boolean;
+    color?: string;
+    align?: TextAlignment;
+  }) => {
+    setTextEditorStyle((prev) => ({ ...prev, ...patch }));
+    if (!selectedTextBlockId) return;
+    const target = editableBlocks.find((b) => b.id === selectedTextBlockId);
+    if (!target) return;
+    pushHistorySnapshot();
+    lastTypedBlockRef.current = null;
+    setEditableBlocks((prev) =>
+      prev.map((b) => (b.id === selectedTextBlockId ? { ...b, ...patch, isModified: true } : b))
+    );
+    setHasUnsavedChanges(true);
+  };
+
+  const pendingTextEditCount = editableBlocks.filter(
+    (b) =>
+      (b.source === 'existing' && (b.isModified || b.isDeleted)) ||
+      (b.source === 'new' && !b.isDeleted && b.text.trim().length > 0)
+  ).length;
+
   const handleUndo = useCallback(() => {
     if (undoStack.length === 0) return;
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, prev.length - 1));
-    setRedoStack((prev) => [...prev, annotations]);
-    setAnnotations(previous);
+    setRedoStack((prev) => [
+      ...prev,
+      {
+        annotations: annotations.map((a) => ({ ...a })),
+        editableBlocks: editableBlocks.map((b) => ({ ...b })),
+      },
+    ]);
+    setAnnotations(previous.annotations);
+    setEditableBlocks(previous.editableBlocks);
+    lastTypedBlockRef.current = null;
     setHasUnsavedChanges(true);
-  }, [undoStack, annotations]);
+  }, [undoStack, annotations, editableBlocks]);
 
   const handleRedo = useCallback(() => {
     if (redoStack.length === 0) return;
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, prev.length - 1));
-    setUndoStack((prev) => [...prev, annotations]);
-    setAnnotations(next);
+    setUndoStack((prev) => [
+      ...prev,
+      {
+        annotations: annotations.map((a) => ({ ...a })),
+        editableBlocks: editableBlocks.map((b) => ({ ...b })),
+      },
+    ]);
+    setAnnotations(next.annotations);
+    setEditableBlocks(next.editableBlocks);
+    lastTypedBlockRef.current = null;
     setHasUnsavedChanges(true);
-  }, [redoStack, annotations]);
+  }, [redoStack, annotations, editableBlocks]);
 
   const handleImagePicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -298,21 +537,61 @@ export default function App() {
     e.target.value = '';
   };
 
-  // Save modified PDF with embedded annotations via native save dialog or browser download
-  const handleSaveFile = async () => {
+  // Commit existing PDF text edits + annotations directly into the PDF content stream
+  const handleCommitTextEdits = async () => {
+    if (!documentInfo || pendingTextEditCount === 0) return;
+    setIsCommittingTextEdits(true);
+    try {
+      const committedBytes = await pdfTextEditEngine.commitTextEditsToPdf(
+        documentInfo.data,
+        editableBlocks,
+        annotations
+      );
+      await loadPdfBytes(committedBytes, documentInfo.name, undefined, {
+        preserveToolAndPage: currentPage,
+      });
+    } catch (err: any) {
+      console.error('Failed to commit PDF text edits', err);
+      alert('Failed to apply text edits to PDF: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsCommittingTextEdits(false);
+    }
+  };
+
+  // Save modified PDF (commits existing text edits + annotations via MuPDF + pdf-lib)
+  const handleSaveFile = async (saveAs = false) => {
     if (!documentInfo) return;
 
+    setIsCommittingTextEdits(true);
     try {
       let finalBytes = documentInfo.data;
-      if (annotations.length > 0) {
-        finalBytes = await pdfEditorService.applyAnnotations(documentInfo.data, annotations);
+      const hasAnyEdits = pendingTextEditCount > 0 || annotations.length > 0;
+
+      if (hasAnyEdits) {
+        finalBytes = await pdfTextEditEngine.commitTextEditsToPdf(
+          documentInfo.data,
+          editableBlocks,
+          annotations
+        );
       }
 
-      await desktopBridge.savePdf(finalBytes, documentInfo.name);
-      setHasUnsavedChanges(false);
-    } catch (err) {
+      const targetName = saveAs
+        ? `${documentInfo.name.replace(/\.pdf$/i, '')}_edited.pdf`
+        : documentInfo.name;
+
+      const saved = await desktopBridge.savePdf(finalBytes, targetName);
+      if (saved && hasAnyEdits) {
+        await loadPdfBytes(finalBytes, targetName, undefined, {
+          preserveToolAndPage: currentPage,
+        });
+      } else if (saved) {
+        setHasUnsavedChanges(false);
+      }
+    } catch (err: any) {
       console.error('Save failed', err);
-      alert('Failed to save PDF.');
+      alert('Failed to save PDF: ' + (err?.message || 'Unknown error'));
+    } finally {
+      setIsCommittingTextEdits(false);
     }
   };
 
@@ -344,7 +623,10 @@ export default function App() {
             handleOpenFile();
             break;
           case 'save':
-            handleSaveFile();
+            handleSaveFile(false);
+            break;
+          case 'save-as':
+            handleSaveFile(true);
             break;
           case 'print':
             handlePrint();
@@ -438,7 +720,7 @@ export default function App() {
         handleOpenFile();
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
-        handleSaveFile();
+        handleSaveFile(e.shiftKey);
       } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
         e.preventDefault();
         handlePrint();
@@ -455,11 +737,15 @@ export default function App() {
         setZoom((z) => Math.max(0.3, z - 0.15));
       } else if (e.key === 'Escape') {
         setActiveAnnotationId(null);
+        setSelectedTextBlockId(null);
+        setEditingTextBlockId(null);
         setActiveSignatureData(null);
         setActiveImageData(null);
         setToolMode('select');
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (activeAnnotationId) {
+        if (toolMode === 'edit-text' && selectedTextBlockId && !editingTextBlockId) {
+          handleDeleteTextBlock(selectedTextBlockId);
+        } else if (activeAnnotationId) {
           handleDeleteAnnotation(activeAnnotationId);
         }
       }
@@ -467,7 +753,20 @@ export default function App() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [documentInfo, annotations, currentPage, docProxy, activeAnnotationId, handleUndo, handleRedo]);
+  }, [
+    documentInfo,
+    annotations,
+    editableBlocks,
+    currentPage,
+    docProxy,
+    activeAnnotationId,
+    selectedTextBlockId,
+    editingTextBlockId,
+    toolMode,
+    handleUndo,
+    handleRedo,
+    handleDeleteTextBlock,
+  ]);
 
   // Page rotation
   const handleRotateClockwise = () => {
@@ -551,7 +850,8 @@ export default function App() {
         theme={theme}
         onToggleTheme={toggleTheme}
         onOpenFile={handleOpenFile}
-        onSaveFile={handleSaveFile}
+        onSaveFile={() => handleSaveFile(false)}
+        onSaveAs={() => handleSaveFile(true)}
         onPrint={handlePrint}
         onOpenSample={handleOpenSample}
         isFullscreen={isFullscreen}
@@ -570,7 +870,12 @@ export default function App() {
         activeTab={activeTab}
         onSelectTab={setActiveTab}
         toolMode={toolMode}
-        onSelectToolMode={setToolMode}
+        onSelectToolMode={(nextMode) => {
+          setToolMode(nextMode);
+          if (nextMode !== 'edit-text') {
+            setEditingTextBlockId(null);
+          }
+        }}
         currentPage={currentPage}
         totalPages={docProxy ? docProxy.numPages : 1}
         onPageChange={setCurrentPage}
@@ -586,7 +891,8 @@ export default function App() {
         strokeWidth={strokeWidth}
         onStrokeWidthChange={setStrokeWidth}
         onOpenFile={handleOpenFile}
-        onDownload={handleSaveFile}
+        onDownload={() => handleSaveFile(false)}
+        onSaveAs={() => handleSaveFile(true)}
         onPrint={handlePrint}
         onOpenSignatureModal={() => setIsSignatureModalOpen(true)}
         onOpenWatermarkModal={() => setIsWatermarkModalOpen(true)}
@@ -607,6 +913,32 @@ export default function App() {
         onRedo={handleRedo}
         canRedo={redoStack.length > 0}
       />
+
+      {/* 2b. Dedicated Existing-PDF Text Editor Formatting Bar */}
+      {toolMode === 'edit-text' && docProxy && activeTab !== 'pages' && (
+        <EditTextToolbar
+          selectedBlock={editableBlocks.find((b) => b.id === selectedTextBlockId) || null}
+          defaultStyle={textEditorStyle}
+          onUpdateStyle={handleUpdateSelectedTextStyle}
+          onAddNewTextBox={() => handleCreateNewTextBlockAt(72, 120)}
+          onDeleteSelectedBlock={() =>
+            selectedTextBlockId && handleDeleteTextBlock(selectedTextBlockId)
+          }
+          onUndo={handleUndo}
+          canUndo={undoStack.length > 0}
+          onRedo={handleRedo}
+          canRedo={redoStack.length > 0}
+          pendingEditCount={pendingTextEditCount}
+          isCommitting={isCommittingTextEdits}
+          onCommitEdits={handleCommitTextEdits}
+          onSave={() => handleSaveFile(false)}
+          onSaveAs={() => handleSaveFile(true)}
+          diagnostics={analyzedPages[currentPage] || null}
+          isAnalyzing={isAnalyzingPageText}
+          onTriggerOcr={() => setIsOcrModalOpen(true)}
+          hasDocument={!!docProxy}
+        />
+      )}
 
       {/* 3. Main Workspace Area */}
       <div className="flex-1 flex overflow-hidden relative">
@@ -665,6 +997,15 @@ export default function App() {
               onConsumeSignature={() => setActiveSignatureData(null)}
               activeImageData={activeImageData}
               onConsumeImage={() => setActiveImageData(null)}
+              editableBlocks={editableBlocks}
+              selectedTextBlockId={selectedTextBlockId}
+              editingTextBlockId={editingTextBlockId}
+              onSelectTextBlock={setSelectedTextBlockId}
+              onStartEditingTextBlock={handleStartEditingTextBlock}
+              onUpdateTextBlock={handleUpdateTextBlock}
+              onCommitTextBlockDragHistory={handleCommitTextBlockDragHistory}
+              onDeleteTextBlock={handleDeleteTextBlock}
+              onCreateNewTextBlockAt={handleCreateNewTextBlockAt}
             />
           </>
         ) : docProxy && activeTab === 'pages' ? (

@@ -12,14 +12,15 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
   const SHORTCUTS = [
     { key: 'Ctrl + O', action: 'Open PDF Document' },
     { key: 'Ctrl + S', action: 'Save Modified PDF' },
+    { key: 'Ctrl + Shift + S', action: 'Save As New PDF' },
     { key: 'Ctrl + P', action: 'Print Active Document' },
-    { key: 'Ctrl + Z', action: 'Undo Annotation' },
-    { key: 'Ctrl + Y', action: 'Redo Annotation' },
+    { key: 'Ctrl + Z', action: 'Undo Edit / Annotation' },
+    { key: 'Ctrl + Y', action: 'Redo Edit / Annotation' },
     { key: 'F11', action: 'Toggle Full Screen Mode' },
     { key: '← / →', action: 'Navigate Previous / Next Page' },
     { key: '+ / -', action: 'Zoom In / Out' },
     { key: 'Escape', action: 'Deselect / Close Active Tool' },
-    { key: 'Delete', action: 'Remove Selected Annotation' },
+    { key: 'Delete', action: 'Delete Selected Text / Item' },
   ];
 
   return (
@@ -45,7 +46,7 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
               <span>100% Client-Side Privacy Guarantee</span>
             </div>
             <p className="text-neutral-600 dark:text-neutral-300 text-[11px] leading-relaxed">
-              All PDF rendering, page manipulation, text recognition (OCR), signature embedding, and conversions occur entirely within your browser memory. No documents or sensitive information are ever sent or uploaded to external servers.
+              All PDF rendering, existing text content-stream editing (MuPDF + pdf-lib), page manipulation, text recognition (OCR), signature embedding, and conversions execute locally in memory without uploading documents to external servers.
             </p>
           </div>
 
@@ -79,13 +80,13 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
             </span>
             <div className="grid grid-cols-2 gap-1.5 text-neutral-600 dark:text-neutral-400 text-[11px]">
               <span className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Edit Existing PDF Text & Fonts
+              </span>
+              <span className="flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> PDF Reader & Vector Canvas
               </span>
               <span className="flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Freehand Pen & Highlighters
-              </span>
-              <span className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Shape Annotations & Text
               </span>
               <span className="flex items-center gap-1.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> Digital Signatures (Draw/Type)
