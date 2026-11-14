@@ -388,7 +388,11 @@ export default function App() {
       data: Uint8Array,
       fileName: string,
       password?: string,
-      options?: { preserveToolAndPage?: number }
+      options?: {
+        preserveToolAndPage?: number;
+        resetRotation?: boolean;
+        markUnsaved?: boolean;
+      }
     ) => {
       try {
         // Guard against Web Worker ArrayBuffer detachment by owning an isolated copy
@@ -413,6 +417,7 @@ export default function App() {
         };
 
         const isInPlaceUpdate = Boolean(options?.preserveToolAndPage && snapshotRef.current.activeDocTabId);
+        const nextRotation = isInPlaceUpdate && !options?.resetRotation ? rotation : 0;
         const tabId = isInPlaceUpdate
           ? snapshotRef.current.activeDocTabId!
           : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -438,7 +443,7 @@ export default function App() {
           docProxy: proxy,
           currentPage: targetPage,
           zoom: isInPlaceUpdate ? zoom : 1.0,
-          rotation: isInPlaceUpdate ? rotation : 0,
+          rotation: nextRotation,
           toolMode: isInPlaceUpdate ? toolMode : 'select',
           activeTab: isInPlaceUpdate ? activeTab : 'read',
           annotations: [],
@@ -449,7 +454,7 @@ export default function App() {
           activeAnnotationId: null,
           undoStack: [],
           redoStack: [],
-          hasUnsavedChanges: false,
+          hasUnsavedChanges: Boolean(options?.markUnsaved),
           thumbnails: {},
           bookmarks: outline,
         };
@@ -467,6 +472,8 @@ export default function App() {
           setZoom(1.0);
           setActiveTab('read');
           setToolMode('select');
+        } else if (options?.resetRotation) {
+          setRotation(0);
         }
         setAnnotations([]);
         setEditableBlocks([]);
@@ -476,7 +483,7 @@ export default function App() {
         setActiveAnnotationId(null);
         setUndoStack([]);
         setRedoStack([]);
-        setHasUnsavedChanges(false);
+        setHasUnsavedChanges(Boolean(options?.markUnsaved));
         setPasswordPrompt(null);
         setBookmarks(outline);
         setThumbnails({});
@@ -569,11 +576,38 @@ export default function App() {
   };
 
   // Automatically analyze current PDF page text & fonts when Edit Text tool is active
+  // (bakes any pending viewport rotation first so text bounding boxes align with rotated page)
   useEffect(() => {
     if (toolMode !== 'edit-text' || !docProxy || !documentInfo) return;
-    if (analyzedPages[currentPage]) return;
 
     let cancelled = false;
+
+    if (rotation % 360 !== 0) {
+      setIsAnalyzingPageText(true);
+      const allPages = Array.from({ length: docProxy.numPages }, (_, i) => i + 1);
+      pdfEditorService
+        .rotatePages(documentInfo.data.slice(), allPages, rotation)
+        .then(async (rotatedBytes) => {
+          if (cancelled) return;
+          await loadPdfBytes(rotatedBytes, documentInfo.name, undefined, {
+            preserveToolAndPage: currentPage,
+            resetRotation: true,
+            markUnsaved: true,
+          });
+        })
+        .catch((err) => {
+          console.error('Failed to bake rotation before editing text', err);
+        })
+        .finally(() => {
+          if (!cancelled) setIsAnalyzingPageText(false);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    if (analyzedPages[currentPage]) return;
+
     setIsAnalyzingPageText(true);
 
     pdfTextEditEngine
@@ -597,7 +631,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [toolMode, docProxy, documentInfo, currentPage, analyzedPages]);
+  }, [toolMode, docProxy, documentInfo, currentPage, analyzedPages, rotation, loadPdfBytes]);
 
   // Helper to push unified Undo history snapshot
   const pushHistorySnapshot = useCallback(
@@ -826,19 +860,50 @@ export default function App() {
     throw new Error('Document buffer is no longer available. Please reopen the PDF.');
   }, [documentInfo, docProxy]);
 
-  // Commit existing PDF text edits + annotations directly into the PDF content stream
+  // Build final PDF bytes incorporating pending text edits, page rotation, and annotations
+  const buildPdfWithPendingChanges = useCallback(async (): Promise<{
+    bytes: Uint8Array;
+    didModifyPdf: boolean;
+  }> => {
+    const sourceBytes = await getSafeDocumentBytes();
+    let workingBytes = sourceBytes;
+    const hasTextEdits = pendingTextEditCount > 0;
+    const hasRotation = rotation % 360 !== 0;
+    const hasAnnotations = annotations.length > 0;
+
+    if (hasTextEdits) {
+      workingBytes = await pdfTextEditEngine.commitTextEditsToPdf(
+        workingBytes,
+        editableBlocks,
+        []
+      );
+    }
+
+    if (hasRotation && docProxy) {
+      const allPages = Array.from({ length: docProxy.numPages }, (_, i) => i + 1);
+      workingBytes = await pdfEditorService.rotatePages(workingBytes, allPages, rotation);
+    }
+
+    if (hasAnnotations) {
+      workingBytes = await pdfEditorService.applyAnnotations(workingBytes, annotations);
+    }
+
+    return {
+      bytes: workingBytes,
+      didModifyPdf: hasTextEdits || hasRotation || hasAnnotations,
+    };
+  }, [getSafeDocumentBytes, pendingTextEditCount, rotation, annotations, editableBlocks, docProxy]);
+
+  // Commit existing PDF text edits + rotation + annotations directly into the PDF content stream
   const handleCommitTextEdits = async () => {
     if (!documentInfo || pendingTextEditCount === 0) return;
     setIsCommittingTextEdits(true);
     try {
-      const sourceBytes = await getSafeDocumentBytes();
-      const committedBytes = await pdfTextEditEngine.commitTextEditsToPdf(
-        sourceBytes,
-        editableBlocks,
-        annotations
-      );
+      const { bytes: committedBytes } = await buildPdfWithPendingChanges();
       await loadPdfBytes(committedBytes, documentInfo.name, undefined, {
         preserveToolAndPage: currentPage,
+        resetRotation: true,
+        markUnsaved: true,
       });
     } catch (err: any) {
       console.error('Failed to commit PDF text edits', err);
@@ -848,32 +913,24 @@ export default function App() {
     }
   };
 
-  // Save modified PDF (commits existing text edits + annotations via MuPDF + pdf-lib)
+  // Save modified PDF (commits existing text edits + rotation + annotations via MuPDF + pdf-lib)
   const handleSaveFile = async (saveAs = false) => {
     if (!documentInfo) return;
 
     setIsCommittingTextEdits(true);
     try {
-      const sourceBytes = await getSafeDocumentBytes();
-      let finalBytes = sourceBytes;
-      const hasAnyEdits = pendingTextEditCount > 0 || annotations.length > 0;
-
-      if (hasAnyEdits) {
-        finalBytes = await pdfTextEditEngine.commitTextEditsToPdf(
-          sourceBytes,
-          editableBlocks,
-          annotations
-        );
-      }
+      const { bytes: finalBytes, didModifyPdf } = await buildPdfWithPendingChanges();
 
       const targetName = saveAs
         ? `${documentInfo.name.replace(/\.pdf$/i, '')}_edited.pdf`
         : documentInfo.name;
 
       const saved = await desktopBridge.savePdf(finalBytes, targetName);
-      if (saved && hasAnyEdits) {
+      if (saved && didModifyPdf) {
         await loadPdfBytes(finalBytes, targetName, undefined, {
           preserveToolAndPage: currentPage,
+          resetRotation: true,
+          markUnsaved: false,
         });
       } else if (saved) {
         setHasUnsavedChanges(false);
@@ -886,21 +943,39 @@ export default function App() {
     }
   };
 
-  // Print PDF (commits pending edits to temp bytes so printed output matches screen!)
+  // Print PDF (commits pending edits + rotation to temp bytes so printed output matches screen!)
   const handlePrint = async () => {
     if (!documentInfo) return;
     try {
-      const sourceBytes = await getSafeDocumentBytes();
-      const hasAnyEdits = pendingTextEditCount > 0 || annotations.length > 0;
-      const printableBytes = hasAnyEdits
-        ? await pdfTextEditEngine.commitTextEditsToPdf(sourceBytes, editableBlocks, annotations)
-        : sourceBytes;
-      await pdfEngine.printDocument(printableBytes, hasAnyEdits ? undefined : docProxy);
+      const { bytes: printableBytes, didModifyPdf } = await buildPdfWithPendingChanges();
+      await pdfEngine.printDocument(printableBytes, didModifyPdf ? undefined : docProxy);
     } catch (err: any) {
       console.error('Print failed', err);
       alert('Failed to print PDF: ' + (err?.message || 'Unknown error'));
     }
   };
+
+  // Page rotation
+  const handleRotateClockwise = useCallback(() => {
+    if (!documentInfo) return;
+    setRotation((r) => (r + 90) % 360);
+    setHasUnsavedChanges(true);
+  }, [documentInfo]);
+
+  const handleRotateCounterClockwise = useCallback(() => {
+    if (!documentInfo) return;
+    setRotation((r) => (r + 270) % 360);
+    setHasUnsavedChanges(true);
+  }, [documentInfo]);
+
+  // Zoom helpers
+  const handleZoomFitWidth = useCallback(() => {
+    setZoom(1.25);
+  }, []);
+
+  const handleZoomFitPage = useCallback(() => {
+    setZoom(0.85);
+  }, []);
 
   // Desktop integration: listen for Windows "Open With", second instances, and menu actions
   useEffect(() => {
@@ -945,16 +1020,16 @@ export default function App() {
             setZoom((z) => Math.max(0.25, Math.round((z - 0.15) * 100) / 100));
             break;
           case 'fit-width':
-            handleZoomFitWidth();
+            ctx.handleZoomFitWidth();
             break;
           case 'fit-page':
-            handleZoomFitPage();
+            ctx.handleZoomFitPage();
             break;
           case 'rotate-cw':
-            handleRotateClockwise();
+            ctx.handleRotateClockwise();
             break;
           case 'rotate-ccw':
-            handleRotateCounterClockwise();
+            ctx.handleRotateCounterClockwise();
             break;
           case 'tool-merge':
             setIsMergeModalOpen(true);
@@ -1005,6 +1080,10 @@ export default function App() {
     handleOpenFile: () => void;
     handleSaveFile: (saveAs?: boolean) => void;
     handlePrint: () => void;
+    handleRotateClockwise: () => void;
+    handleRotateCounterClockwise: () => void;
+    handleZoomFitWidth: () => void;
+    handleZoomFitPage: () => void;
     toggleFullscreen: () => void;
     handleDeleteTextBlock: (id: string) => void;
     handleDeleteAnnotation: (id: string) => void;
@@ -1022,6 +1101,10 @@ export default function App() {
     handleOpenFile,
     handleSaveFile,
     handlePrint,
+    handleRotateClockwise,
+    handleRotateCounterClockwise,
+    handleZoomFitWidth,
+    handleZoomFitPage,
     toggleFullscreen,
     handleDeleteTextBlock,
     handleDeleteAnnotation,
@@ -1041,6 +1124,10 @@ export default function App() {
     handleOpenFile,
     handleSaveFile,
     handlePrint,
+    handleRotateClockwise,
+    handleRotateCounterClockwise,
+    handleZoomFitWidth,
+    handleZoomFitPage,
     toggleFullscreen,
     handleDeleteTextBlock,
     handleDeleteAnnotation,
@@ -1164,23 +1251,7 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
   }, []);
 
-  // Page rotation
-  const handleRotateClockwise = () => {
-    setRotation((r) => (r + 90) % 360);
-  };
 
-  const handleRotateCounterClockwise = () => {
-    setRotation((r) => (r + 270) % 360);
-  };
-
-  // Zoom helpers
-  const handleZoomFitWidth = () => {
-    setZoom(1.25);
-  };
-
-  const handleZoomFitPage = () => {
-    setZoom(0.85);
-  };
 
   // Watermark applied
   const handleApplyWatermark = async (
@@ -1385,14 +1456,22 @@ export default function App() {
               }}
               onRotatePage={async (pageNum) => {
                 if (!documentInfo) return;
-                const rotated = await pdfEditorService.rotatePages(documentInfo.data, [pageNum], 90);
-                await loadPdfBytes(rotated, documentInfo.name);
+                const base = await getSafeDocumentBytes();
+                const rotated = await pdfEditorService.rotatePages(base, [pageNum], 90);
+                await loadPdfBytes(rotated, documentInfo.name, undefined, {
+                  preserveToolAndPage: currentPage,
+                  markUnsaved: true,
+                });
               }}
               onDeletePage={async (pageNum) => {
                 if (!documentInfo || docProxy.numPages <= 1) return;
                 if (confirm(`Delete page ${pageNum}?`)) {
-                  const updated = await pdfEditorService.deletePages(documentInfo.data, [pageNum]);
-                  await loadPdfBytes(updated, documentInfo.name);
+                  const base = await getSafeDocumentBytes();
+                  const updated = await pdfEditorService.deletePages(base, [pageNum]);
+                  await loadPdfBytes(updated, documentInfo.name, undefined, {
+                    preserveToolAndPage: Math.min(currentPage, docProxy.numPages - 1),
+                    markUnsaved: true,
+                  });
                 }
               }}
               onSearch={(query) => pdfEngine.searchText(docProxy, query)}
@@ -1441,7 +1520,17 @@ export default function App() {
             totalPages={docProxy.numPages}
             thumbnails={thumbnails}
             onApplyNewPageOrder={async (newBytes) => {
-              await loadPdfBytes(newBytes, documentInfo!.name);
+              let finalOrganized = newBytes;
+              if (rotation % 360 !== 0) {
+                const count = docProxy?.numPages || documentInfo!.pageCount;
+                const allPages = Array.from({ length: count }, (_, i) => i + 1);
+                finalOrganized = await pdfEditorService.rotatePages(newBytes, allPages, rotation);
+              }
+              await loadPdfBytes(finalOrganized, documentInfo!.name, undefined, {
+                preserveToolAndPage: 1,
+                resetRotation: true,
+                markUnsaved: true,
+              });
               setActiveTab('read');
             }}
             onExitOrganizer={() => setActiveTab('read')}

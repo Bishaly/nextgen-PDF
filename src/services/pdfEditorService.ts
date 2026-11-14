@@ -38,13 +38,26 @@ export const pdfEditorService = {
       if (pageIndex < 0 || pageIndex >= pages.length) continue;
 
       const page = pages[pageIndex];
-      const { height } = page.getSize();
+      const cropBox = page.getCropBox();
+      const pageRot = ((page.getRotation().angle % 360) + 360) % 360;
       const color = hexToRgb(anno.color || '#000000');
       const pdfColor = rgb(color.r, color.g, color.b);
       const opacity = typeof anno.opacity === 'number' ? anno.opacity : 1;
 
-      // Note: PDF coordinate system has Y=0 at the bottom, whereas web UI has Y=0 at top
-      const pdfY = height - anno.y;
+      const toPdfPoint = (vx: number, vy: number): { x: number; y: number } => {
+        if (pageRot === 90) {
+          return { x: cropBox.x + vy, y: cropBox.y + vx };
+        }
+        if (pageRot === 180) {
+          return { x: cropBox.x + (cropBox.width - vx), y: cropBox.y + vy };
+        }
+        if (pageRot === 270) {
+          return { x: cropBox.x + (cropBox.width - vy), y: cropBox.y + (cropBox.height - vx) };
+        }
+        return { x: cropBox.x + vx, y: cropBox.y + (cropBox.height - vy) };
+      };
+
+      const rotOpt = pageRot !== 0 ? degrees(pageRot) : undefined;
 
       switch (anno.type) {
         case 'text':
@@ -67,13 +80,15 @@ export const pdfEditorService = {
             const lineHeight = fontSize * 1.25;
 
             lines.forEach((line, lIdx) => {
+              const pos = toPdfPoint(anno.x, anno.y + fontSize + lIdx * lineHeight);
               page.drawText(line, {
-                x: anno.x,
-                y: pdfY - fontSize - (lIdx * lineHeight),
+                x: pos.x,
+                y: pos.y,
                 size: fontSize,
                 font: chosenFont,
                 color: pdfColor,
                 opacity,
+                rotate: rotOpt,
               });
             });
           }
@@ -83,22 +98,27 @@ export const pdfEditorService = {
         case 'highlight': {
           const w = anno.width || 100;
           const h = anno.height || 20;
+          const origin = toPdfPoint(anno.x, anno.y + h);
           page.drawRectangle({
-            x: anno.x,
-            y: pdfY - h,
+            x: origin.x,
+            y: origin.y,
             width: w,
             height: h,
             color: pdfColor,
             opacity: 0.35,
+            rotate: rotOpt,
           });
           break;
         }
 
         case 'underline': {
           const w = anno.width || 100;
+          const h = anno.height || 18;
+          const p1 = toPdfPoint(anno.x, anno.y + h);
+          const p2 = toPdfPoint(anno.x + w, anno.y + h);
           page.drawLine({
-            start: { x: anno.x, y: pdfY },
-            end: { x: anno.x + w, y: pdfY },
+            start: p1,
+            end: p2,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
@@ -108,9 +128,12 @@ export const pdfEditorService = {
 
         case 'strikethrough': {
           const w = anno.width || 100;
+          const h = anno.height || 18;
+          const p1 = toPdfPoint(anno.x, anno.y + h / 2);
+          const p2 = toPdfPoint(anno.x + w, anno.y + h / 2);
           page.drawLine({
-            start: { x: anno.x, y: pdfY + 4 },
-            end: { x: anno.x + w, y: pdfY + 4 },
+            start: p1,
+            end: p2,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
@@ -121,9 +144,10 @@ export const pdfEditorService = {
         case 'shape-rect': {
           const w = Math.max(10, anno.width || 80);
           const h = Math.max(10, anno.height || 60);
+          const origin = toPdfPoint(anno.x, anno.y + h);
           page.drawRectangle({
-            x: anno.x,
-            y: pdfY - h,
+            x: origin.x,
+            y: origin.y,
             width: w,
             height: h,
             borderColor: pdfColor,
@@ -131,15 +155,17 @@ export const pdfEditorService = {
             color: rgb(color.r, color.g, color.b),
             opacity: opacity < 1 ? opacity * 0.2 : 0,
             borderOpacity: opacity,
+            rotate: rotOpt,
           });
           break;
         }
 
         case 'shape-circle': {
           const r = Math.max(5, (anno.width || 60) / 2);
+          const center = toPdfPoint(anno.x + r, anno.y + r);
           page.drawCircle({
-            x: anno.x + r,
-            y: pdfY - r,
+            x: center.x,
+            y: center.y,
             size: r,
             borderColor: pdfColor,
             borderWidth: anno.strokeWidth || 2,
@@ -149,9 +175,11 @@ export const pdfEditorService = {
         }
 
         case 'shape-line': {
+          const p1 = toPdfPoint(anno.x, anno.y);
+          const p2 = toPdfPoint(anno.x + (anno.width || 100), anno.y + (anno.height || 0));
           page.drawLine({
-            start: { x: anno.x, y: pdfY },
-            end: { x: anno.x + (anno.width || 100), y: pdfY - (anno.height || 0) },
+            start: p1,
+            end: p2,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
@@ -160,38 +188,43 @@ export const pdfEditorService = {
         }
 
         case 'shape-arrow': {
-          const x1 = anno.x;
-          const y1 = pdfY;
-          const x2 = anno.x + (anno.width || 100);
-          const y2 = pdfY - (anno.height || 0);
+          const vx1 = anno.x;
+          const vy1 = anno.y;
+          const vx2 = anno.x + (anno.width || 100);
+          const vy2 = anno.y + (anno.height || 0);
+
+          const p1 = toPdfPoint(vx1, vy1);
+          const p2 = toPdfPoint(vx2, vy2);
 
           page.drawLine({
-            start: { x: x1, y: y1 },
-            end: { x: x2, y: y2 },
+            start: p1,
+            end: p2,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
           });
 
-          // Draw arrowhead
-          const angle = Math.atan2(y2 - y1, x2 - x1);
+          // Draw arrowhead in visual coordinates, then map to PDF space
+          const vAngle = Math.atan2(vy2 - vy1, vx2 - vx1);
           const headLength = 12;
+          const h1 = toPdfPoint(
+            vx2 - headLength * Math.cos(vAngle - Math.PI / 6),
+            vy2 - headLength * Math.sin(vAngle - Math.PI / 6)
+          );
+          const h2 = toPdfPoint(
+            vx2 - headLength * Math.cos(vAngle + Math.PI / 6),
+            vy2 - headLength * Math.sin(vAngle + Math.PI / 6)
+          );
           page.drawLine({
-            start: { x: x2, y: y2 },
-            end: {
-              x: x2 - headLength * Math.cos(angle - Math.PI / 6),
-              y: y2 - headLength * Math.sin(angle - Math.PI / 6),
-            },
+            start: p2,
+            end: h1,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
           });
           page.drawLine({
-            start: { x: x2, y: y2 },
-            end: {
-              x: x2 - headLength * Math.cos(angle + Math.PI / 6),
-              y: y2 - headLength * Math.sin(angle + Math.PI / 6),
-            },
+            start: p2,
+            end: h2,
             thickness: anno.strokeWidth || 2,
             color: pdfColor,
             opacity,
@@ -204,8 +237,8 @@ export const pdfEditorService = {
             const pts = anno.points;
             for (let i = 0; i < pts.length - 1; i++) {
               page.drawLine({
-                start: { x: pts[i].x, y: height - pts[i].y },
-                end: { x: pts[i + 1].x, y: height - pts[i + 1].y },
+                start: toPdfPoint(pts[i].x, pts[i].y),
+                end: toPdfPoint(pts[i + 1].x, pts[i + 1].y),
                 thickness: anno.strokeWidth || 2.5,
                 color: pdfColor,
                 opacity,
@@ -232,12 +265,14 @@ export const pdfEditorService = {
               if (embeddedImage) {
                 const imgW = anno.width || 160;
                 const imgH = anno.height || 60;
+                const origin = toPdfPoint(anno.x, anno.y + imgH);
                 page.drawImage(embeddedImage, {
-                  x: anno.x,
-                  y: pdfY - imgH,
+                  x: origin.x,
+                  y: origin.y,
                   width: imgW,
                   height: imgH,
                   opacity,
+                  rotate: rotOpt,
                 });
               }
             } catch (e) {
