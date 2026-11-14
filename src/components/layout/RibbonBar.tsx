@@ -256,9 +256,9 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
             <div className="flex items-center gap-1.5 pr-3 border-r border-neutral-200 dark:border-neutral-700">
               <button
                 onClick={onZoomOut}
-                disabled={!hasDocument || zoom <= 0.3}
+                disabled={!hasDocument || zoom <= 0.25}
                 className="p-1.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 disabled:opacity-40"
-                title="Zoom Out"
+                title="Zoom Out (-)"
               >
                 <ZoomOut className="w-4 h-4" />
               </button>
@@ -269,9 +269,9 @@ export const RibbonBar: React.FC<RibbonBarProps> = ({
 
               <button
                 onClick={onZoomIn}
-                disabled={!hasDocument || zoom >= 3.0}
+                disabled={!hasDocument || zoom >= 4.0}
                 className="p-1.5 rounded hover:bg-neutral-200 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 disabled:opacity-40"
-                title="Zoom In"
+                title="Zoom In (+)"
               >
                 <ZoomIn className="w-4 h-4" />
               </button>

@@ -374,6 +374,33 @@ function setupIpcHandlers() {
       size: stats.size
     };
   });
+  import_electron2.ipcMain.handle("dialog:openPdfs", async () => {
+    if (!mainWindow) return [];
+    const result = await import_electron2.dialog.showOpenDialog(mainWindow, {
+      title: "Open PDF Documents \u2014 NextGen PDF Studio",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        { name: "PDF Documents (*.pdf)", extensions: ["pdf"] },
+        { name: "All Files (*.*)", extensions: ["*"] }
+      ]
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return [];
+    }
+    const files = [];
+    for (const selectedPath of result.filePaths) {
+      if (!isValidFilePath(selectedPath)) continue;
+      const stats = await import_fs.default.promises.stat(selectedPath);
+      const data = await import_fs.default.promises.readFile(selectedPath);
+      files.push({
+        name: import_path.default.basename(selectedPath),
+        path: selectedPath,
+        data: new Uint8Array(data),
+        size: stats.size
+      });
+    }
+    return files;
+  });
   import_electron2.ipcMain.handle("dialog:savePdf", async (_event, data, defaultName) => {
     if (!mainWindow) return { success: false, error: "Window not available" };
     const cleanDefault = defaultName ? import_path.default.basename(defaultName) : "Untitled.pdf";

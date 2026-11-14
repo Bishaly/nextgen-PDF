@@ -64,3 +64,49 @@
   color: transparent;
 }
 
+/* Native Print Portal Layout */
+#nextgen-print-root {
+  display: none;
+}
+
+@media print {
+  html,
+  body {
+    overflow: visible !important;
+    height: auto !important;
+    width: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+  }
+
+  #root {
+    display: none !important;
+  }
+
+  #nextgen-print-root {
+    display: block !important;
+    width: 100% !important;
+  }
+
+  .nextgen-print-page {
+    width: 100%;
+    page-break-after: always;
+    break-after: page;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+  }
+
+  .nextgen-print-page:last-child {
+    page-break-after: auto;
+    break-after: auto;
+  }
+
+  .nextgen-print-page img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+}
+

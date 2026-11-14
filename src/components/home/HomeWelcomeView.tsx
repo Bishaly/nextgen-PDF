@@ -33,31 +33,8 @@ export const HomeWelcomeView: React.FC<HomeWelcomeViewProps> = ({
   onRemoveRecent,
   onQuickAction,
 }) => {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    const droppedFile = e.dataTransfer.files?.[0];
-    if (droppedFile) {
-      onFileDrop(droppedFile);
-    }
-  };
-
-  const handleFileInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onFileDrop(file);
-    }
-  };
-
   return (
     <div
-      onDragOver={handleDragOver}
-      onDrop={handleDrop}
       className="flex-1 flex flex-col h-full bg-[#f8f9fa] dark:bg-[#121215] overflow-y-auto p-6 md:p-10 select-none"
     >
       <div className="max-w-5xl mx-auto w-full space-y-8">
@@ -98,11 +75,11 @@ export const HomeWelcomeView: React.FC<HomeWelcomeViewProps> = ({
 
           <div className="flex flex-wrap items-center justify-center gap-3">
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={onOpenFile}
               className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs flex items-center gap-2 shadow-sm transition-all"
             >
               <FolderOpen className="w-4 h-4" />
-              <span>Browse Local PDF</span>
+              <span>Browse Local PDFs</span>
             </button>
 
             <button
@@ -113,14 +90,6 @@ export const HomeWelcomeView: React.FC<HomeWelcomeViewProps> = ({
               <span>Open Sample Document</span>
             </button>
           </div>
-
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="application/pdf"
-            onChange={handleFileInputChange}
-            className="hidden"
-          />
         </div>
 
         {/* Quick Launch Tools Grid */}

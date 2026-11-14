@@ -36,7 +36,9 @@ export function mapPdfFontInfo(
     lower.includes('menlo') ||
     lower.includes('jetbrains') ||
     lower.includes('fira') ||
-    lower.includes('inconsolata')
+    lower.includes('inconsolata') ||
+    lower.includes('cascadia') ||
+    lower.includes('source code')
   ) {
     fontFamily = 'Courier';
   } else if (
@@ -48,7 +50,10 @@ export function mapPdfFontInfo(
     lower.includes('palatino') ||
     lower.includes('cambria') ||
     lower.includes('book') ||
-    lower.includes('minion')
+    lower.includes('minion') ||
+    lower.includes('baskerville') ||
+    lower.includes('merriweather') ||
+    lower.includes('lora')
   ) {
     fontFamily = 'Times-Roman';
   }
@@ -60,8 +65,14 @@ export function mapPdfFontInfo(
       lower.includes('heavy') ||
       lower.includes('semibold') ||
       lower.includes('demi') ||
+      lower.includes('extrab') ||
+      lower.includes('600') ||
+      lower.includes('700') ||
+      lower.includes('800') ||
+      lower.includes('900') ||
       lower.includes('-bd') ||
-      lower.endsWith('bd')
+      lower.endsWith('bd') ||
+      lower.endsWith('-b')
   );
 
   const isItalic = Boolean(
@@ -70,7 +81,8 @@ export function mapPdfFontInfo(
       lower.includes('oblique') ||
       lower.includes('slant') ||
       lower.includes('-it') ||
-      lower.endsWith('it')
+      lower.endsWith('it') ||
+      lower.endsWith('-o')
   );
 
   const isStandardPdfFont =
@@ -78,6 +90,7 @@ export function mapPdfFontInfo(
     lower.startsWith('arial') ||
     lower.startsWith('times') ||
     lower.startsWith('courier') ||
+    lower.startsWith('liberation') ||
     lower === 'sans-serif' ||
     lower === 'serif' ||
     lower === 'monospace';
@@ -91,12 +104,23 @@ export function mapPdfFontInfo(
   };
 }
 
-function rgbArrayToHex(color?: number[]): string {
+function rgbArrayToHex(color?: ArrayLike<number> | null): string {
   if (!color || color.length === 0) return '#000000';
   if (color.length === 1) {
     const g = Math.max(0, Math.min(255, Math.round(color[0] * 255)));
     const h = g.toString(16).padStart(2, '0');
     return `#${h}${h}${h}`;
+  }
+  if (color.length === 4) {
+    // Handle CMYK normalized [c, m, y, k]
+    const c = color[0] ?? 0;
+    const m = color[1] ?? 0;
+    const y = color[2] ?? 0;
+    const k = color[3] ?? 0;
+    const r = Math.max(0, Math.min(255, Math.round(255 * (1 - c) * (1 - k))));
+    const g = Math.max(0, Math.min(255, Math.round(255 * (1 - m) * (1 - k))));
+    const b = Math.max(0, Math.min(255, Math.round(255 * (1 - y) * (1 - k))));
+    return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
   }
   const r = Math.max(0, Math.min(255, Math.round((color[0] ?? 0) * 255)));
   const g = Math.max(0, Math.min(255, Math.round((color[1] ?? 0) * 255)));
@@ -302,8 +326,10 @@ export const pdfTextEditEngine = {
     let isEncrypted = false;
     const customFontSet = new Set<string>();
 
+    let baseDoc: mupdf.Document | null = null;
     try {
-      const baseDoc = mupdf.Document.openDocument(pdfBytes, 'application/pdf');
+      const mupdfInput = pdfBytes.slice();
+      baseDoc = mupdf.Document.openDocument(mupdfInput, 'application/pdf');
       isEncrypted = baseDoc.needsPassword();
       const mDoc = baseDoc.asPDF();
 
@@ -359,32 +385,79 @@ export const pdfTextEditEngine = {
               isSerif: font.isSerif(),
               isMono: font.isMono(),
               size,
-              color: Array.isArray(color) ? color : [0, 0, 0],
+              color:
+                color && typeof (color as ArrayLike<number>).length === 'number'
+                  ? Array.from(color as ArrayLike<number>)
+                  : [0, 0, 0],
             });
           },
           endLine() {
             if (currentChars.length === 0) return;
 
-            // Split a line if there is a wide horizontal column gap (e.g., table row cells!)
+            // Split a line on wide horizontal column gaps OR when inline text color/font style changes
             const segments: CharAccum[][] = [];
             let activeSeg: CharAccum[] = [];
+            let lastNonSpaceStyle: {
+              colorHex: string;
+              fontFamily: EditableFontFamily;
+              isBold: boolean;
+              isItalic: boolean;
+              size: number;
+            } | null = null;
 
             for (let i = 0; i < currentChars.length; i++) {
               const ch = currentChars[i];
+              const isVisibleChar = ch.c.trim().length > 0;
+              const chMapped = mapPdfFontInfo(ch.fontName, {
+                isBold: ch.isBold,
+                isItalic: ch.isItalic,
+                isSerif: ch.isSerif,
+                isMono: ch.isMono,
+              });
+              const chColorHex = rgbArrayToHex(ch.color);
+
               if (activeSeg.length === 0) {
                 activeSeg.push(ch);
+                if (isVisibleChar) {
+                  lastNonSpaceStyle = {
+                    colorHex: chColorHex,
+                    fontFamily: chMapped.fontFamily,
+                    isBold: chMapped.isBold,
+                    isItalic: chMapped.isItalic,
+                    size: ch.size,
+                  };
+                }
                 continue;
               }
+
               const prev = activeSeg[activeSeg.length - 1];
               const gap = ch.x0 - prev.x1;
               const fontThreshold = Math.max(prev.size, 8) * 1.4;
 
-              // If there's a large horizontal gap or consecutive spaces creating a table column jump, split!
-              if (gap > fontThreshold) {
+              const styleChanged =
+                isVisibleChar &&
+                lastNonSpaceStyle !== null &&
+                (chColorHex !== lastNonSpaceStyle.colorHex ||
+                  chMapped.fontFamily !== lastNonSpaceStyle.fontFamily ||
+                  chMapped.isBold !== lastNonSpaceStyle.isBold ||
+                  chMapped.isItalic !== lastNonSpaceStyle.isItalic ||
+                  Math.abs(ch.size - lastNonSpaceStyle.size) > 1.2);
+
+              if (gap > fontThreshold || styleChanged) {
                 segments.push(activeSeg);
                 activeSeg = [ch];
               } else {
                 activeSeg.push(ch);
+              }
+
+              if (isVisibleChar) {
+                lastNonSpaceStyle = {
+                  colorHex: chColorHex,
+                  fontFamily: chMapped.fontFamily,
+                  isBold: chMapped.isBold,
+                  isItalic: chMapped.isItalic,
+                  size: ch.size,
+                };
               }
             }
             if (activeSeg.length > 0) {
@@ -450,6 +523,9 @@ export const pdfTextEditEngine = {
           },
         });
 
+        stext.destroy?.();
+        mPage.destroy?.();
+
         // Group adjacent vertical lines that share style & alignment into paragraph EditableTextBlocks
         blocks = groupLinesIntoBlocks(rawLines, pageNumber);
       }
@@ -482,6 +558,8 @@ export const pdfTextEditEngine = {
         isDeleted: false,
         isModified: false,
       }));
+    } finally {
+      baseDoc?.destroy?.();
     }
 
     // Build honest PageEditDiagnostics
@@ -552,65 +630,74 @@ export const pdfTextEditEngine = {
         ((b.source === 'existing' && b.isModified) || b.source === 'new')
     );
 
-    let workingBytes = originalBytes;
+    let workingBytes: Uint8Array = new Uint8Array(originalBytes);
 
     // Stage 1: True content-stream text removal using MuPDF WASM redaction (zero white/black boxes!)
     if (existingEdits.length > 0) {
-      const baseDoc = mupdf.Document.openDocument(workingBytes, 'application/pdf');
-      if (baseDoc.needsPassword()) {
-        throw new Error('Cannot modify content stream of a password-protected PDF without unlocking it first.');
-      }
-      const mDoc = baseDoc.asPDF();
-      if (!mDoc) {
-        throw new Error('Document is not a valid editable PDF structure.');
-      }
-
-      const editsByPage = new Map<number, EditableTextBlock[]>();
-      for (const blk of existingEdits) {
-        const list = editsByPage.get(blk.page) || [];
-        list.push(blk);
-        editsByPage.set(blk.page, list);
-      }
-
-      for (const [pageNum, pageBlocks] of editsByPage.entries()) {
-        const pageIdx = pageNum - 1;
-        if (pageIdx < 0 || pageIdx >= mDoc.countPages()) continue;
-
-        const mPage = mDoc.loadPage(pageIdx) as mupdf.PDFPage;
-        const bounds = mPage.getBounds();
-        const bx0 = bounds[0] || 0;
-        const by0 = bounds[1] || 0;
-
-        for (const blk of pageBlocks) {
-          const rectsToRedact =
-            blk.origRects && blk.origRects.length > 0
-              ? blk.origRects
-              : [{ x: blk.origX, y: blk.origY, width: blk.origWidth, height: blk.origHeight }];
-
-          for (const r of rectsToRedact) {
-            if (r.width <= 0 || r.height <= 0) continue;
-            // Tightly shrink vertically by 0.25pt to avoid accidentally clipping adjacent table rules
-            const yPad = Math.min(0.35, r.height * 0.03);
-            const annot = mPage.createAnnotation('Redact');
-            annot.setRect([
-              r.x + bx0,
-              r.y + by0 + yPad,
-              r.x + r.width + bx0,
-              r.y + r.height + by0 - yPad,
-            ]);
-          }
+      const baseDoc = mupdf.Document.openDocument(workingBytes.slice(), 'application/pdf');
+      let saveBuf: mupdf.Buffer | null = null;
+      try {
+        if (baseDoc.needsPassword()) {
+          throw new Error('Cannot modify content stream of a password-protected PDF without unlocking it first.');
+        }
+        const mDoc = baseDoc.asPDF();
+        if (!mDoc) {
+          throw new Error('Document is not a valid editable PDF structure.');
         }
 
-        // Remove ONLY overlapping text operators; keep images, vector borders, and shaded backgrounds!
-        mPage.applyRedactions(
-          false,
-          mupdf.PDFPage.REDACT_IMAGE_NONE,
-          mupdf.PDFPage.REDACT_LINE_ART_NONE,
-          mupdf.PDFPage.REDACT_TEXT_REMOVE
-        );
-      }
+        const editsByPage = new Map<number, EditableTextBlock[]>();
+        for (const blk of existingEdits) {
+          const list = editsByPage.get(blk.page) || [];
+          list.push(blk);
+          editsByPage.set(blk.page, list);
+        }
 
-      workingBytes = new Uint8Array(mDoc.saveToBuffer('compress,garbage').asUint8Array());
+        for (const [pageNum, pageBlocks] of editsByPage.entries()) {
+          const pageIdx = pageNum - 1;
+          if (pageIdx < 0 || pageIdx >= mDoc.countPages()) continue;
+
+          const mPage = mDoc.loadPage(pageIdx) as mupdf.PDFPage;
+          const bounds = mPage.getBounds();
+          const bx0 = bounds[0] || 0;
+          const by0 = bounds[1] || 0;
+
+          for (const blk of pageBlocks) {
+            const rectsToRedact =
+              blk.origRects && blk.origRects.length > 0
+                ? blk.origRects
+                : [{ x: blk.origX, y: blk.origY, width: blk.origWidth, height: blk.origHeight }];
+
+            for (const r of rectsToRedact) {
+              if (r.width <= 0 || r.height <= 0) continue;
+              // Tightly shrink vertically by 0.25pt to avoid accidentally clipping adjacent table rules
+              const yPad = Math.min(0.35, r.height * 0.03);
+              const annot = mPage.createAnnotation('Redact');
+              annot.setRect([
+                r.x + bx0,
+                r.y + by0 + yPad,
+                r.x + r.width + bx0,
+                r.y + r.height + by0 - yPad,
+              ]);
+            }
+          }
+
+          // Remove ONLY overlapping text operators; keep images, vector borders, and shaded backgrounds!
+          mPage.applyRedactions(
+            false,
+            mupdf.PDFPage.REDACT_IMAGE_NONE,
+            mupdf.PDFPage.REDACT_LINE_ART_NONE,
+            mupdf.PDFPage.REDACT_TEXT_REMOVE
+          );
+          mPage.destroy?.();
+        }
+
+        saveBuf = mDoc.saveToBuffer('compress,garbage');
+        // Copy out of WASM linear memory immediately via .slice() before destroying handles
+        workingBytes = saveBuf.asUint8Array().slice();
+      } finally {
+        saveBuf?.destroy?.();
+        baseDoc.destroy?.();
+      }
     }
 
     // Stage 2: Re-insert replacement & new text cleanly via pdf-lib with full typography & alignment
@@ -864,7 +951,7 @@ function groupLinesIntoBlocks(rawLines: RawLine[], pageNumber: number): Editable
       text: fullText,
       x: x0,
       y: y0,
-      width: width + 8, // Slight breathing room for editing without premature wrapping
+      width: width + Math.max(14, Math.round((first.fontSize || 11) * 1.2)),
       height,
       fontSize: first.fontSize || 11,
       fontFamily: first.fontFamily,

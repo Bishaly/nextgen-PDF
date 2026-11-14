@@ -23,6 +23,7 @@ var electronAPI = {
   openExternal: (url) => import_electron.ipcRenderer.invoke("app:openExternal", url),
   dialog: {
     openPdf: () => import_electron.ipcRenderer.invoke("dialog:openPdf"),
+    openPdfs: () => import_electron.ipcRenderer.invoke("dialog:openPdfs"),
     savePdf: (data, defaultName) => import_electron.ipcRenderer.invoke("dialog:savePdf", data, defaultName),
     exportFile: (data, defaultName, mimeType) => import_electron.ipcRenderer.invoke("dialog:exportFile", data, defaultName, mimeType)
   },

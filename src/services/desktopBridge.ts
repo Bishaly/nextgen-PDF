@@ -33,6 +33,22 @@ export const desktopBridge = {
     return null;
   },
 
+  async openPdfs(): Promise<ElectronFileResult[]> {
+    if (this.isElectron() && window.electronAPI) {
+      try {
+        if (window.electronAPI.dialog.openPdfs) {
+          return await window.electronAPI.dialog.openPdfs();
+        }
+        const single = await window.electronAPI.dialog.openPdf();
+        return single ? [single] : [];
+      } catch (err) {
+        console.error('Electron multi-open dialog failed', err);
+        return [];
+      }
+    }
+    return [];
+  },
+
   // Save PDF via Native Windows Save Dialog in Electron, or download in Web
   async savePdf(data: Uint8Array, defaultName: string): Promise<boolean> {
     if (this.isElectron() && window.electronAPI) {

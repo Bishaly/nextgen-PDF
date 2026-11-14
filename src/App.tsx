@@ -5,6 +5,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { TitleBar } from './components/layout/TitleBar';
+import { DocumentTabsBar } from './components/layout/DocumentTabsBar';
 import { RibbonBar } from './components/layout/RibbonBar';
 import { Sidebar } from './components/layout/Sidebar';
 import { DocumentViewer } from './components/reader/DocumentViewer';
@@ -35,6 +36,7 @@ import {
   EditableFontFamily,
   PageEditDiagnostics,
   TextAlignment,
+  OpenDocumentSession,
 } from './types/pdf';
 import { pdfEngine } from './services/pdfEngine';
 import { pdfEditorService } from './services/pdfEditorService';
@@ -54,7 +56,11 @@ export default function App() {
   const [selectedColor, setSelectedColor] = useState('#ef4444');
   const [strokeWidth, setStrokeWidth] = useState(2);
 
-  // Document State
+  // Multi-Document Tab Sessions
+  const [openTabs, setOpenTabs] = useState<OpenDocumentSession[]>([]);
+  const [activeDocTabId, setActiveDocTabId] = useState<string | null>(null);
+
+  // Active Document State
   const [documentInfo, setDocumentInfo] = useState<DocumentInfo | null>(null);
   const [docProxy, setDocProxy] = useState<any>(null);
   const [currentPage, setCurrentPage] = useState(1);
@@ -160,7 +166,223 @@ export default function App() {
     }
   };
 
-  // Helper to load document bytes into PDF.js and state
+  // Build an immutable snapshot of the currently displayed document workspace
+  const buildCurrentSessionSnapshot = useCallback(
+    (tabId: string): OpenDocumentSession | null => {
+      if (!documentInfo || !docProxy) return null;
+      return {
+        tabId,
+        documentInfo,
+        docProxy,
+        currentPage,
+        zoom,
+        rotation,
+        toolMode,
+        activeTab,
+        annotations: annotations.map((a) => ({ ...a })),
+        editableBlocks: editableBlocks.map((b) => ({ ...b })),
+        analyzedPages: { ...analyzedPages },
+        selectedTextBlockId,
+        editingTextBlockId,
+        activeAnnotationId,
+        undoStack: [...undoStack],
+        redoStack: [...redoStack],
+        hasUnsavedChanges,
+        thumbnails: { ...thumbnails },
+        bookmarks: [...bookmarks],
+      };
+    },
+    [
+      documentInfo,
+      docProxy,
+      currentPage,
+      zoom,
+      rotation,
+      toolMode,
+      activeTab,
+      annotations,
+      editableBlocks,
+      analyzedPages,
+      selectedTextBlockId,
+      editingTextBlockId,
+      activeAnnotationId,
+      undoStack,
+      redoStack,
+      hasUnsavedChanges,
+      thumbnails,
+      bookmarks,
+    ]
+  );
+
+  // Sync live active tab metadata (page number, unsaved badge, document title, thumbnails) into openTabs
+  useEffect(() => {
+    if (!activeDocTabId || !documentInfo || !docProxy) return;
+    setOpenTabs((prev) =>
+      prev.map((tab) =>
+        tab.tabId === activeDocTabId
+          ? {
+              ...tab,
+              documentInfo,
+              docProxy,
+              currentPage,
+              zoom,
+              rotation,
+              toolMode,
+              activeTab,
+              annotations,
+              editableBlocks,
+              analyzedPages,
+              selectedTextBlockId,
+              editingTextBlockId,
+              activeAnnotationId,
+              undoStack,
+              redoStack,
+              hasUnsavedChanges,
+              thumbnails,
+              bookmarks,
+            }
+          : tab
+      )
+    );
+  }, [
+    activeDocTabId,
+    documentInfo,
+    docProxy,
+    currentPage,
+    zoom,
+    rotation,
+    toolMode,
+    activeTab,
+    annotations,
+    editableBlocks,
+    analyzedPages,
+    selectedTextBlockId,
+    editingTextBlockId,
+    activeAnnotationId,
+    undoStack,
+    redoStack,
+    hasUnsavedChanges,
+    thumbnails,
+    bookmarks,
+  ]);
+
+  // Keep latest snapshot builder reachable in loadPdfBytes without cyclic re-renders
+  const snapshotRef = useRef<{
+    activeDocTabId: string | null;
+    buildCurrentSessionSnapshot: (tabId: string) => OpenDocumentSession | null;
+  }>({ activeDocTabId, buildCurrentSessionSnapshot });
+  snapshotRef.current = { activeDocTabId, buildCurrentSessionSnapshot };
+
+  // Switch between open PDF tabs (or null to view Home screen while keeping tabs open)
+  const handleSelectTab = useCallback(
+    (targetTabId: string | null) => {
+      if (targetTabId === activeDocTabId) return;
+
+      const currentSnap = activeDocTabId ? buildCurrentSessionSnapshot(activeDocTabId) : null;
+      if (currentSnap) {
+        setOpenTabs((prev) =>
+          prev.map((t) => (t.tabId === activeDocTabId ? currentSnap : t))
+        );
+      }
+
+      if (targetTabId === null) {
+        setActiveDocTabId(null);
+        setDocumentInfo(null);
+        setDocProxy(null);
+        setSelectedTextBlockId(null);
+        setEditingTextBlockId(null);
+        setActiveAnnotationId(null);
+        return;
+      }
+
+      const nextTab = openTabs.find((t) => t.tabId === targetTabId);
+      if (!nextTab) return;
+
+      setActiveDocTabId(nextTab.tabId);
+      setDocumentInfo(nextTab.documentInfo);
+      setDocProxy(nextTab.docProxy);
+      setCurrentPage(nextTab.currentPage);
+      setZoom(nextTab.zoom);
+      setRotation(nextTab.rotation);
+      setToolMode(nextTab.toolMode);
+      setActiveTab(nextTab.activeTab);
+      setAnnotations(nextTab.annotations);
+      setEditableBlocks(nextTab.editableBlocks);
+      setAnalyzedPages(nextTab.analyzedPages);
+      setSelectedTextBlockId(nextTab.selectedTextBlockId);
+      setEditingTextBlockId(nextTab.editingTextBlockId);
+      setActiveAnnotationId(nextTab.activeAnnotationId);
+      setUndoStack(nextTab.undoStack);
+      setRedoStack(nextTab.redoStack);
+      setHasUnsavedChanges(nextTab.hasUnsavedChanges);
+      setThumbnails(nextTab.thumbnails);
+      setBookmarks(nextTab.bookmarks);
+      lastTypedBlockRef.current = null;
+    },
+    [activeDocTabId, buildCurrentSessionSnapshot, openTabs]
+  );
+
+  // Close a specific open PDF tab
+  const handleCloseTab = useCallback(
+    (targetTabId: string) => {
+      const targetTab =
+        targetTabId === activeDocTabId && documentInfo
+          ? buildCurrentSessionSnapshot(targetTabId)
+          : openTabs.find((t) => t.tabId === targetTabId);
+
+      if (targetTab?.hasUnsavedChanges) {
+        if (!confirm(`Close "${targetTab.documentInfo.name}" without saving changes?`)) {
+          return;
+        }
+      }
+
+      const remaining = openTabs.filter((t) => t.tabId !== targetTabId);
+      setOpenTabs(remaining);
+
+      if (targetTabId === activeDocTabId) {
+        if (remaining.length > 0) {
+          const nextTab = remaining[remaining.length - 1];
+          setActiveDocTabId(nextTab.tabId);
+          setDocumentInfo(nextTab.documentInfo);
+          setDocProxy(nextTab.docProxy);
+          setCurrentPage(nextTab.currentPage);
+          setZoom(nextTab.zoom);
+          setRotation(nextTab.rotation);
+          setToolMode(nextTab.toolMode);
+          setActiveTab(nextTab.activeTab);
+          setAnnotations(nextTab.annotations);
+          setEditableBlocks(nextTab.editableBlocks);
+          setAnalyzedPages(nextTab.analyzedPages);
+          setSelectedTextBlockId(nextTab.selectedTextBlockId);
+          setEditingTextBlockId(nextTab.editingTextBlockId);
+          setActiveAnnotationId(nextTab.activeAnnotationId);
+          setUndoStack(nextTab.undoStack);
+          setRedoStack(nextTab.redoStack);
+          setHasUnsavedChanges(nextTab.hasUnsavedChanges);
+          setThumbnails(nextTab.thumbnails);
+          setBookmarks(nextTab.bookmarks);
+        } else {
+          setActiveDocTabId(null);
+          setDocumentInfo(null);
+          setDocProxy(null);
+          setAnnotations([]);
+          setEditableBlocks([]);
+          setAnalyzedPages({});
+          setSelectedTextBlockId(null);
+          setEditingTextBlockId(null);
+          setActiveAnnotationId(null);
+          setUndoStack([]);
+          setRedoStack([]);
+          setHasUnsavedChanges(false);
+          setThumbnails({});
+          setBookmarks([]);
+        }
+      }
+    },
+    [activeDocTabId, buildCurrentSessionSnapshot, documentInfo, openTabs]
+  );
+
+  // Helper to load document bytes into PDF.js and open in active/new tab
   const loadPdfBytes = useCallback(
     async (
       data: Uint8Array,
@@ -169,85 +391,139 @@ export default function App() {
       options?: { preserveToolAndPage?: number }
     ) => {
       try {
-        const proxy = await pdfEngine.loadDocument(data, password);
-        setDocProxy(proxy);
+        // Guard against Web Worker ArrayBuffer detachment by owning an isolated copy
+        const ownedBytes =
+          data.buffer.byteLength > 0 && data.byteLength > 0
+            ? data.slice()
+            : new Uint8Array(data);
+
+        const proxy = await pdfEngine.loadDocument(ownedBytes.slice(), password);
+        const targetPage = options?.preserveToolAndPage
+          ? Math.min(options.preserveToolAndPage, proxy.numPages)
+          : 1;
 
         const docId = `${fileName}_${Date.now()}`;
         const info: DocumentInfo = {
           id: docId,
           name: fileName,
-          size: data.byteLength,
+          size: ownedBytes.byteLength,
           pageCount: proxy.numPages,
-          data,
+          data: ownedBytes,
           lastModified: Date.now(),
         };
 
+        const isInPlaceUpdate = Boolean(options?.preserveToolAndPage && snapshotRef.current.activeDocTabId);
+        const tabId = isInPlaceUpdate
+          ? snapshotRef.current.activeDocTabId!
+          : `tab_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+        // Save previous active tab snapshot before switching to a newly opened tab
+        if (!isInPlaceUpdate && snapshotRef.current.activeDocTabId) {
+          const prevSnap = snapshotRef.current.buildCurrentSessionSnapshot(
+            snapshotRef.current.activeDocTabId
+          );
+          if (prevSnap) {
+            setOpenTabs((prev) =>
+              prev.map((t) => (t.tabId === prevSnap.tabId ? prevSnap : t))
+            );
+          }
+        }
+
+        const outline = await pdfEngine.getBookmarks(proxy);
+
+        // Create tab entry right away so rapid multi-file drops appear cleanly in tab bar
+        const freshSession: OpenDocumentSession = {
+          tabId,
+          documentInfo: info,
+          docProxy: proxy,
+          currentPage: targetPage,
+          zoom: isInPlaceUpdate ? zoom : 1.0,
+          rotation: isInPlaceUpdate ? rotation : 0,
+          toolMode: isInPlaceUpdate ? toolMode : 'select',
+          activeTab: isInPlaceUpdate ? activeTab : 'read',
+          annotations: [],
+          editableBlocks: [],
+          analyzedPages: {},
+          selectedTextBlockId: null,
+          editingTextBlockId: null,
+          activeAnnotationId: null,
+          undoStack: [],
+          redoStack: [],
+          hasUnsavedChanges: false,
+          thumbnails: {},
+          bookmarks: outline,
+        };
+
+        setOpenTabs((prev) => {
+          const exists = prev.some((t) => t.tabId === tabId);
+          return exists ? prev.map((t) => (t.tabId === tabId ? freshSession : t)) : [...prev, freshSession];
+        });
+        setActiveDocTabId(tabId);
         setDocumentInfo(info);
-        setCurrentPage(
-          options?.preserveToolAndPage
-            ? Math.min(options.preserveToolAndPage, proxy.numPages)
-            : 1
-        );
-        setRotation(0);
-        if (!options?.preserveToolAndPage) {
+        setDocProxy(proxy);
+        setCurrentPage(targetPage);
+        if (!isInPlaceUpdate) {
+          setRotation(0);
           setZoom(1.0);
           setActiveTab('read');
+          setToolMode('select');
         }
         setAnnotations([]);
         setEditableBlocks([]);
         setAnalyzedPages({});
         setSelectedTextBlockId(null);
         setEditingTextBlockId(null);
+        setActiveAnnotationId(null);
         setUndoStack([]);
         setRedoStack([]);
         setHasUnsavedChanges(false);
         setPasswordPrompt(null);
+        setBookmarks(outline);
+        setThumbnails({});
 
-      // Load bookmarks
-      const outline = await pdfEngine.getBookmarks(proxy);
-      setBookmarks(outline);
+        // Generate thumbnails in background
+        const thumbMap: { [page: number]: string } = {};
+        const maxThumbPages = Math.min(proxy.numPages, 30);
+        for (let i = 1; i <= maxThumbPages; i++) {
+          const thumb = await pdfEngine.renderThumbnail(proxy, i, 120);
+          thumbMap[i] = thumb;
+        }
+        setThumbnails(thumbMap);
 
-      // Generate thumbnails in background
-      const thumbMap: { [page: number]: string } = {};
-      const maxThumbPages = Math.min(proxy.numPages, 30);
-      for (let i = 1; i <= maxThumbPages; i++) {
-        const thumb = await pdfEngine.renderThumbnail(proxy, i, 120);
-        thumbMap[i] = thumb;
-      }
-      setThumbnails(thumbMap);
-
-      // Save to recent files
-      const firstThumb = thumbMap[1] || '';
-      const recentItem: RecentFile = {
-        id: docId,
-        name: fileName,
-        size: data.byteLength,
-        pageCount: proxy.numPages,
-        timestamp: Date.now(),
-        thumbnail: firstThumb,
-      };
-      await storageService.addRecentFile(recentItem, data);
-      const updatedRecents = await storageService.getRecentFiles();
-      setRecentFiles(updatedRecents);
-    } catch (err: any) {
-      console.error('Failed to load PDF document', err);
-      if (err.name === 'PasswordException' || err.message?.includes('password')) {
-        setPasswordPrompt({
-          data,
+        // Save to recent files
+        const firstThumb = thumbMap[1] || '';
+        const recentItem: RecentFile = {
+          id: docId,
           name: fileName,
-          error: password ? 'Incorrect password. Please try again.' : undefined,
-        });
-      } else {
-        alert('Could not open PDF: ' + (err.message || 'Unknown error'));
+          size: ownedBytes.byteLength,
+          pageCount: proxy.numPages,
+          timestamp: Date.now(),
+          thumbnail: firstThumb,
+        };
+        await storageService.addRecentFile(recentItem, ownedBytes.slice());
+        const updatedRecents = await storageService.getRecentFiles();
+        setRecentFiles(updatedRecents);
+      } catch (err: any) {
+        console.error('Failed to load PDF document', err);
+        if (err.name === 'PasswordException' || err.message?.includes('password')) {
+          setPasswordPrompt({
+            data,
+            name: fileName,
+            error: password ? 'Incorrect password. Please try again.' : undefined,
+          });
+        } else {
+          alert('Could not open PDF: ' + (err.message || 'Unknown error'));
+        }
       }
-    }
-  }, []);
+    },
+    [zoom, rotation, toolMode, activeTab]
+  );
 
-  // Open file from local filesystem or Windows native dialog
+  // Open file(s) from local filesystem or Windows native dialog (supports multiple PDFs)
   const handleOpenFile = async () => {
     if (desktopBridge.isElectron()) {
-      const file = await desktopBridge.openPdf();
-      if (file) {
+      const files = await desktopBridge.openPdfs();
+      for (const file of files) {
         await loadPdfBytes(file.data, file.name);
       }
     } else {
@@ -256,12 +532,13 @@ export default function App() {
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
+    const files = Array.from(e.target.files || []);
+    for (const file of files) {
       const buffer = await file.arrayBuffer();
       const bytes = new Uint8Array(buffer);
       await loadPdfBytes(bytes, file.name);
     }
+    e.target.value = '';
   };
 
   // Open sample PDF
@@ -537,13 +814,26 @@ export default function App() {
     e.target.value = '';
   };
 
+  // Helper to obtain an intact, non-detached Uint8Array copy of the current document
+  const getSafeDocumentBytes = useCallback(async (): Promise<Uint8Array> => {
+    if (documentInfo && documentInfo.data && documentInfo.data.byteLength > 0) {
+      return documentInfo.data.slice();
+    }
+    if (docProxy && typeof docProxy.getData === 'function') {
+      const workerBytes = await docProxy.getData();
+      return new Uint8Array(workerBytes).slice();
+    }
+    throw new Error('Document buffer is no longer available. Please reopen the PDF.');
+  }, [documentInfo, docProxy]);
+
   // Commit existing PDF text edits + annotations directly into the PDF content stream
   const handleCommitTextEdits = async () => {
     if (!documentInfo || pendingTextEditCount === 0) return;
     setIsCommittingTextEdits(true);
     try {
+      const sourceBytes = await getSafeDocumentBytes();
       const committedBytes = await pdfTextEditEngine.commitTextEditsToPdf(
-        documentInfo.data,
+        sourceBytes,
         editableBlocks,
         annotations
       );
@@ -564,12 +854,13 @@ export default function App() {
 
     setIsCommittingTextEdits(true);
     try {
-      let finalBytes = documentInfo.data;
+      const sourceBytes = await getSafeDocumentBytes();
+      let finalBytes = sourceBytes;
       const hasAnyEdits = pendingTextEditCount > 0 || annotations.length > 0;
 
       if (hasAnyEdits) {
         finalBytes = await pdfTextEditEngine.commitTextEditsToPdf(
-          documentInfo.data,
+          sourceBytes,
           editableBlocks,
           annotations
         );
@@ -595,10 +886,19 @@ export default function App() {
     }
   };
 
-  // Print PDF
-  const handlePrint = () => {
-    if (documentInfo) {
-      pdfEngine.printDocument(documentInfo.data);
+  // Print PDF (commits pending edits to temp bytes so printed output matches screen!)
+  const handlePrint = async () => {
+    if (!documentInfo) return;
+    try {
+      const sourceBytes = await getSafeDocumentBytes();
+      const hasAnyEdits = pendingTextEditCount > 0 || annotations.length > 0;
+      const printableBytes = hasAnyEdits
+        ? await pdfTextEditEngine.commitTextEditsToPdf(sourceBytes, editableBlocks, annotations)
+        : sourceBytes;
+      await pdfEngine.printDocument(printableBytes, hasAnyEdits ? undefined : docProxy);
+    } catch (err: any) {
+      console.error('Print failed', err);
+      alert('Failed to print PDF: ' + (err?.message || 'Unknown error'));
     }
   };
 
@@ -618,30 +918,31 @@ export default function App() {
       });
 
       const unsubMenu = desktopBridge.onMenuAction((action) => {
+        const ctx = keyboardActionsRef.current;
         switch (action) {
           case 'open':
-            handleOpenFile();
+            ctx.handleOpenFile();
             break;
           case 'save':
-            handleSaveFile(false);
+            ctx.handleSaveFile(false);
             break;
           case 'save-as':
-            handleSaveFile(true);
+            ctx.handleSaveFile(true);
             break;
           case 'print':
-            handlePrint();
+            ctx.handlePrint();
             break;
           case 'undo':
-            handleUndo();
+            ctx.handleUndo();
             break;
           case 'redo':
-            handleRedo();
+            ctx.handleRedo();
             break;
           case 'zoom-in':
-            setZoom((z) => Math.min(3.0, z + 0.15));
+            setZoom((z) => Math.min(4.0, Math.round((z + 0.15) * 100) / 100));
             break;
           case 'zoom-out':
-            setZoom((z) => Math.max(0.3, z - 0.15));
+            setZoom((z) => Math.max(0.25, Math.round((z - 0.15) * 100) / 100));
             break;
           case 'fit-width':
             handleZoomFitWidth();
@@ -683,10 +984,9 @@ export default function App() {
             setIsHelpModalOpen(true);
             break;
           case 'close-doc':
-            setDocumentInfo(null);
-            setDocProxy(null);
-            setAnnotations([]);
-            setHasUnsavedChanges(false);
+            if (ctx.activeDocTabId) {
+              ctx.handleCloseTab(ctx.activeDocTabId);
+            }
             break;
         }
       });
@@ -696,77 +996,173 @@ export default function App() {
         if (unsubMenu) unsubMenu();
       };
     }
-  }, [loadPdfBytes, handleUndo, handleRedo]);
+  }, [loadPdfBytes]);
 
-  // Keyboard Shortcuts Handler
+  // Ref-backed Desktop Keyboard Shortcuts Handler (capture phase, never stale closures)
+  const keyboardActionsRef = useRef<{
+    handleUndo: () => void;
+    handleRedo: () => void;
+    handleOpenFile: () => void;
+    handleSaveFile: (saveAs?: boolean) => void;
+    handlePrint: () => void;
+    toggleFullscreen: () => void;
+    handleDeleteTextBlock: (id: string) => void;
+    handleDeleteAnnotation: (id: string) => void;
+    handleCloseTab: (id: string) => void;
+    activeDocTabId: string | null;
+    docProxy: any;
+    currentPage: number;
+    toolMode: ToolMode;
+    selectedTextBlockId: string | null;
+    editingTextBlockId: string | null;
+    activeAnnotationId: string | null;
+  }>({
+    handleUndo,
+    handleRedo,
+    handleOpenFile,
+    handleSaveFile,
+    handlePrint,
+    toggleFullscreen,
+    handleDeleteTextBlock,
+    handleDeleteAnnotation,
+    handleCloseTab,
+    activeDocTabId,
+    docProxy,
+    currentPage,
+    toolMode,
+    selectedTextBlockId,
+    editingTextBlockId,
+    activeAnnotationId,
+  });
+
+  keyboardActionsRef.current = {
+    handleUndo,
+    handleRedo,
+    handleOpenFile,
+    handleSaveFile,
+    handlePrint,
+    toggleFullscreen,
+    handleDeleteTextBlock,
+    handleDeleteAnnotation,
+    handleCloseTab,
+    activeDocTabId,
+    docProxy,
+    currentPage,
+    toolMode,
+    selectedTextBlockId,
+    editingTextBlockId,
+    activeAnnotationId,
+  };
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Avoid firing when typing inside an input or textarea
-      if (
-        document.activeElement?.tagName === 'INPUT' ||
-        document.activeElement?.tagName === 'TEXTAREA'
-      ) {
+      const ctx = keyboardActionsRef.current;
+      const activeTag = document.activeElement?.tagName;
+      const isTextInput =
+        activeTag === 'INPUT' ||
+        activeTag === 'TEXTAREA' ||
+        (document.activeElement as HTMLElement | null)?.isContentEditable;
+      const ctrlOrMeta = e.ctrlKey || e.metaKey;
+      const keyLower = e.key.toLowerCase();
+
+      // Always intercept global app-level Ctrl+O / Ctrl+S / Ctrl+P / Ctrl+W / F11 / Ctrl Zoom / Escape
+      if (ctrlOrMeta && keyLower === 'o') {
+        e.preventDefault();
+        ctx.handleOpenFile();
         return;
       }
-
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+      if (ctrlOrMeta && keyLower === 's') {
         e.preventDefault();
-        handleUndo();
-      } else if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y' || (e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        ctx.handleSaveFile(e.shiftKey);
+        return;
+      }
+      if (ctrlOrMeta && keyLower === 'p') {
         e.preventDefault();
-        handleRedo();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
+        ctx.handlePrint();
+        return;
+      }
+      if (ctrlOrMeta && keyLower === 'w' && ctx.activeDocTabId) {
         e.preventDefault();
-        handleOpenFile();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        ctx.handleCloseTab(ctx.activeDocTabId);
+        return;
+      }
+      if (ctrlOrMeta && (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd')) {
         e.preventDefault();
-        handleSaveFile(e.shiftKey);
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
+        setZoom((z) => Math.min(4.0, Math.round((z + 0.15) * 100) / 100));
+        return;
+      }
+      if (ctrlOrMeta && (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract')) {
         e.preventDefault();
-        handlePrint();
-      } else if (e.key === 'F11') {
+        setZoom((z) => Math.max(0.25, Math.round((z - 0.15) * 100) / 100));
+        return;
+      }
+      if (ctrlOrMeta && e.key === '0') {
         e.preventDefault();
-        toggleFullscreen();
-      } else if (e.key === 'ArrowLeft') {
-        if (currentPage > 1) setCurrentPage((p) => p - 1);
-      } else if (e.key === 'ArrowRight') {
-        if (docProxy && currentPage < docProxy.numPages) setCurrentPage((p) => p + 1);
-      } else if (e.key === '+' || e.key === '=') {
-        setZoom((z) => Math.min(3.0, z + 0.15));
-      } else if (e.key === '-' || e.key === '_') {
-        setZoom((z) => Math.max(0.3, z - 0.15));
-      } else if (e.key === 'Escape') {
+        setZoom(1.0);
+        return;
+      }
+      if (e.key === 'F11') {
+        e.preventDefault();
+        ctx.toggleFullscreen();
+        return;
+      }
+      if (e.key === 'Escape') {
+        if (ctx.editingTextBlockId) {
+          setEditingTextBlockId(null);
+          return;
+        }
         setActiveAnnotationId(null);
         setSelectedTextBlockId(null);
-        setEditingTextBlockId(null);
         setActiveSignatureData(null);
         setActiveImageData(null);
         setToolMode('select');
+        return;
+      }
+
+      // When actively typing inside an input/textarea, let native typing/undo/arrows/delete behave normally
+      if (isTextInput) {
+        return;
+      }
+
+      if (ctrlOrMeta && keyLower === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        ctx.handleUndo();
+      } else if (
+        ctrlOrMeta &&
+        (keyLower === 'y' || (e.shiftKey && keyLower === 'z'))
+      ) {
+        e.preventDefault();
+        ctx.handleRedo();
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (ctx.docProxy && ctx.currentPage > 1) {
+          e.preventDefault();
+          setCurrentPage((p) => Math.max(1, p - 1));
+        }
+      } else if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        if (ctx.docProxy && ctx.currentPage < ctx.docProxy.numPages) {
+          e.preventDefault();
+          setCurrentPage((p) => Math.min(ctx.docProxy.numPages, p + 1));
+        }
+      } else if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+        e.preventDefault();
+        setZoom((z) => Math.min(4.0, Math.round((z + 0.15) * 100) / 100));
+      } else if (e.key === '-' || e.key === '_' || e.code === 'NumpadSubtract') {
+        e.preventDefault();
+        setZoom((z) => Math.max(0.25, Math.round((z - 0.15) * 100) / 100));
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (toolMode === 'edit-text' && selectedTextBlockId && !editingTextBlockId) {
-          handleDeleteTextBlock(selectedTextBlockId);
-        } else if (activeAnnotationId) {
-          handleDeleteAnnotation(activeAnnotationId);
+        if (ctx.toolMode === 'edit-text' && ctx.selectedTextBlockId && !ctx.editingTextBlockId) {
+          e.preventDefault();
+          ctx.handleDeleteTextBlock(ctx.selectedTextBlockId);
+        } else if (ctx.activeAnnotationId) {
+          e.preventDefault();
+          ctx.handleDeleteAnnotation(ctx.activeAnnotationId);
         }
       }
     };
 
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [
-    documentInfo,
-    annotations,
-    editableBlocks,
-    currentPage,
-    docProxy,
-    activeAnnotationId,
-    selectedTextBlockId,
-    editingTextBlockId,
-    toolMode,
-    handleUndo,
-    handleRedo,
-    handleDeleteTextBlock,
-  ]);
+    window.addEventListener('keydown', handleKeyDown, { capture: true });
+    return () => window.removeEventListener('keydown', handleKeyDown, { capture: true });
+  }, []);
 
   // Page rotation
   const handleRotateClockwise = () => {
@@ -827,12 +1223,32 @@ export default function App() {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col overflow-hidden bg-[#f3f4f6] dark:bg-[#18181b] text-neutral-800 dark:text-neutral-200">
-      {/* Hidden File Picker */}
+    <div
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes('Files')) {
+          e.preventDefault();
+        }
+      }}
+      onDrop={async (e) => {
+        const files = Array.from(e.dataTransfer?.files || []).filter(
+          (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf')
+        );
+        if (files.length > 0) {
+          e.preventDefault();
+          for (const file of files) {
+            const buffer = await file.arrayBuffer();
+            await loadPdfBytes(new Uint8Array(buffer), file.name);
+          }
+        }
+      }}
+      className="h-screen w-screen flex flex-col overflow-hidden bg-[#f3f4f6] dark:bg-[#18181b] text-neutral-800 dark:text-neutral-200"
+    >
+      {/* Hidden Multi-File Picker */}
       <input
         ref={fileInputRef}
         type="file"
         accept="application/pdf"
+        multiple
         onChange={handleFileChange}
         className="hidden"
       />
@@ -865,6 +1281,15 @@ export default function App() {
         onOpenSettings={() => setIsSettingsModalOpen(true)}
       />
 
+      {/* 1b. Open PDF Documents Multi-Tab Strip */}
+      <DocumentTabsBar
+        tabs={openTabs}
+        activeTabId={activeDocTabId}
+        onSelectTab={handleSelectTab}
+        onCloseTab={handleCloseTab}
+        onOpenFiles={handleOpenFile}
+      />
+
       {/* 2. Desktop RibbonBar */}
       <RibbonBar
         activeTab={activeTab}
@@ -880,8 +1305,8 @@ export default function App() {
         totalPages={docProxy ? docProxy.numPages : 1}
         onPageChange={setCurrentPage}
         zoom={zoom}
-        onZoomIn={() => setZoom((z) => Math.min(3.0, z + 0.15))}
-        onZoomOut={() => setZoom((z) => Math.max(0.3, z - 0.15))}
+        onZoomIn={() => setZoom((z) => Math.min(4.0, Math.round((z + 0.15) * 100) / 100))}
+        onZoomOut={() => setZoom((z) => Math.max(0.25, Math.round((z - 0.15) * 100) / 100))}
         onZoomFitWidth={handleZoomFitWidth}
         onZoomFitPage={handleZoomFitPage}
         onRotateClockwise={handleRotateClockwise}
@@ -978,6 +1403,7 @@ export default function App() {
 
             {/* Central Document Viewer Canvas */}
             <DocumentViewer
+              key={activeDocTabId || 'none'}
               docProxy={docProxy}
               currentPage={currentPage}
               onPageChange={setCurrentPage}

@@ -22,6 +22,7 @@ const electronAPI = {
 
   dialog: {
     openPdf: (): Promise<ElectronFileResult | null> => ipcRenderer.invoke('dialog:openPdf'),
+    openPdfs: (): Promise<ElectronFileResult[]> => ipcRenderer.invoke('dialog:openPdfs'),
     savePdf: (data: Uint8Array, defaultName: string): Promise<ElectronSaveResult> =>
       ipcRenderer.invoke('dialog:savePdf', data, defaultName),
     exportFile: (data: Uint8Array | string, defaultName: string, mimeType?: string): Promise<ElectronSaveResult> =>

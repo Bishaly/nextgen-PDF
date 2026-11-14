@@ -192,7 +192,7 @@ function setupIpcHandlers() {
     return null;
   });
 
-  // Open PDF via Native Windows Dialog
+  // Open Single PDF via Native Windows Dialog
   ipcMain.handle('dialog:openPdf', async () => {
     if (!mainWindow) return null;
 
@@ -223,6 +223,38 @@ function setupIpcHandlers() {
       data: new Uint8Array(data),
       size: stats.size,
     };
+  });
+
+  // Open Multiple PDFs via Native Windows Dialog
+  ipcMain.handle('dialog:openPdfs', async () => {
+    if (!mainWindow) return [];
+
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Open PDF Documents — NextGen PDF Studio',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'PDF Documents (*.pdf)', extensions: ['pdf'] },
+        { name: 'All Files (*.*)', extensions: ['*'] },
+      ],
+    });
+
+    if (result.canceled || result.filePaths.length === 0) {
+      return [];
+    }
+
+    const files = [];
+    for (const selectedPath of result.filePaths) {
+      if (!isValidFilePath(selectedPath)) continue;
+      const stats = await fs.promises.stat(selectedPath);
+      const data = await fs.promises.readFile(selectedPath);
+      files.push({
+        name: path.basename(selectedPath),
+        path: selectedPath,
+        data: new Uint8Array(data),
+        size: stats.size,
+      });
+    }
+    return files;
   });
 
   // Save PDF to Local Disk

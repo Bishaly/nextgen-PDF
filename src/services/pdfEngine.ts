@@ -17,8 +17,15 @@ export interface RenderPageResult {
 
 export const pdfEngine = {
   async loadDocument(data: Uint8Array | ArrayBuffer, password?: string) {
+    // PDF.js transfers the underlying ArrayBuffer to its Web Worker, detaching it.
+    // Always pass an isolated clone so callers (state, MuPDF, pdf-lib, IndexedDB) keep intact bytes.
+    const workerBytes =
+      data instanceof Uint8Array
+        ? data.slice()
+        : new Uint8Array(data.slice(0));
+
     const loadingTask = pdfjsLib.getDocument({
-      data,
+      data: workerBytes,
       password: password || '',
       cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/',
       cMapPacked: true,
@@ -198,34 +205,62 @@ export const pdfEngine = {
     }
   },
 
-  printDocument(pdfBytes: Uint8Array) {
-    const blob = new Blob([pdfBytes as any], { type: 'application/pdf' });
-    const blobUrl = URL.createObjectURL(blob);
-    const iframe = document.createElement('iframe');
-    iframe.style.position = 'fixed';
-    iframe.style.right = '0';
-    iframe.style.bottom = '0';
-    iframe.style.width = '0';
-    iframe.style.height = '0';
-    iframe.style.border = '0';
-    iframe.src = blobUrl;
-    document.body.appendChild(iframe);
+  async printDocument(pdfBytes: Uint8Array, existingDocProxy?: any) {
+    const existingRoot = document.getElementById('nextgen-print-root');
+    if (existingRoot) existingRoot.remove();
 
-    iframe.onload = () => {
-      setTimeout(() => {
-        try {
-          iframe.focus();
-          iframe.contentWindow?.print();
-        } catch (e) {
-          console.error('Print trigger error', e);
-          window.open(blobUrl, '_blank');
-        } finally {
-          setTimeout(() => {
-            document.body.removeChild(iframe);
-            URL.revokeObjectURL(blobUrl);
-          }, 60000);
-        }
-      }, 500);
+    const printRoot = document.createElement('div');
+    printRoot.id = 'nextgen-print-root';
+    document.body.appendChild(printRoot);
+
+    const cleanup = () => {
+      printRoot.remove();
+      window.removeEventListener('afterprint', cleanup);
     };
+    window.addEventListener('afterprint', cleanup);
+
+    try {
+      const doc = existingDocProxy || (await this.loadDocument(pdfBytes.slice()));
+      const numPages = doc.numPages || 1;
+
+      for (let i = 1; i <= numPages; i++) {
+        const page = await doc.getPage(i);
+        const viewport = page.getViewport({ scale: 2.0 });
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.floor(viewport.width);
+        canvas.height = Math.floor(viewport.height);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          await page.render({ canvasContext: ctx, viewport }).promise;
+        }
+
+        const pageWrapper = document.createElement('div');
+        pageWrapper.className = 'nextgen-print-page';
+        const img = document.createElement('img');
+        img.src = canvas.toDataURL('image/png');
+        pageWrapper.appendChild(img);
+        printRoot.appendChild(pageWrapper);
+
+        if (typeof img.decode === 'function') {
+          await img.decode().catch(() => {});
+        }
+      }
+
+      await new Promise((r) => setTimeout(r, 80));
+      window.print();
+
+      setTimeout(() => {
+        if (document.body.contains(printRoot)) {
+          cleanup();
+        }
+      }, 60000);
+    } catch (err) {
+      cleanup();
+      console.error('Print rendering failed:', err);
+      throw err;
+    }
   },
 };
+

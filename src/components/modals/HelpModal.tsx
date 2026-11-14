@@ -10,15 +10,16 @@ export const HelpModal: React.FC<HelpModalProps> = ({ isOpen, onClose }) => {
   if (!isOpen) return null;
 
   const SHORTCUTS = [
-    { key: 'Ctrl + O', action: 'Open PDF Document' },
+    { key: 'Ctrl + O', action: 'Open PDF Document(s)' },
     { key: 'Ctrl + S', action: 'Save Modified PDF' },
     { key: 'Ctrl + Shift + S', action: 'Save As New PDF' },
     { key: 'Ctrl + P', action: 'Print Active Document' },
+    { key: 'Ctrl + W', action: 'Close Active PDF Tab' },
     { key: 'Ctrl + Z', action: 'Undo Edit / Annotation' },
     { key: 'Ctrl + Y', action: 'Redo Edit / Annotation' },
     { key: 'F11', action: 'Toggle Full Screen Mode' },
     { key: '← / →', action: 'Navigate Previous / Next Page' },
-    { key: '+ / -', action: 'Zoom In / Out' },
+    { key: '+ / - or Ctrl+Scroll', action: 'Zoom In / Out' },
     { key: 'Escape', action: 'Deselect / Close Active Tool' },
     { key: 'Delete', action: 'Delete Selected Text / Item' },
   ];

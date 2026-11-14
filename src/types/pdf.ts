@@ -152,3 +152,31 @@ export interface UserSettings {
   authorName: string;
   highQualityRender: boolean;
 }
+
+export interface UndoRedoSnapshot {
+  annotations: Annotation[];
+  editableBlocks: EditableTextBlock[];
+}
+
+export interface OpenDocumentSession {
+  tabId: string;
+  documentInfo: DocumentInfo;
+  docProxy: any;
+  currentPage: number;
+  zoom: number;
+  rotation: number;
+  toolMode: ToolMode;
+  activeTab: MainTab;
+  annotations: Annotation[];
+  editableBlocks: EditableTextBlock[];
+  analyzedPages: Record<number, PageEditDiagnostics>;
+  selectedTextBlockId: string | null;
+  editingTextBlockId: string | null;
+  activeAnnotationId: string | null;
+  undoStack: UndoRedoSnapshot[];
+  redoStack: UndoRedoSnapshot[];
+  hasUnsavedChanges: boolean;
+  thumbnails: { [page: number]: string };
+  bookmarks: BookmarkItem[];
+}
+

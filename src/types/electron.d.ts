@@ -19,6 +19,7 @@ export interface ElectronAPI {
   
   dialog: {
     openPdf: () => Promise<ElectronFileResult | null>;
+    openPdfs?: () => Promise<ElectronFileResult[]>;
     savePdf: (data: Uint8Array, defaultName: string) => Promise<ElectronSaveResult>;
     exportFile: (data: Uint8Array | string, defaultName: string, mimeType?: string) => Promise<ElectronSaveResult>;
   };

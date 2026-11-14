@@ -22,28 +22,46 @@ interface PdfTextEditorLayerProps {
 
 function getCssFontFamily(family: EditableTextBlock['fontFamily']): string {
   if (family === 'Times-Roman') return "'Times New Roman', Times, Georgia, serif";
-  if (family === 'Courier') return "'JetBrains Mono', 'Courier New', Courier, monospace";
-  return "'Plus Jakarta Sans', Arial, Helvetica, sans-serif";
+  if (family === 'Courier') return "'Courier New', Courier, monospace";
+  return 'Arial, Helvetica, sans-serif';
+}
+
+function isLightHexColor(hex?: string): boolean {
+  if (!hex || !hex.startsWith('#')) return false;
+  const clean = hex.slice(1);
+  const full =
+    clean.length === 3
+      ? clean[0] + clean[0] + clean[1] + clean[1] + clean[2] + clean[2]
+      : clean.padEnd(6, '0').slice(0, 6);
+  const r = parseInt(full.slice(0, 2), 16) || 0;
+  const g = parseInt(full.slice(2, 4), 16) || 0;
+  const b = parseInt(full.slice(4, 6), 16) || 0;
+  return 0.299 * r + 0.587 * g + 0.114 * b > 185;
 }
 
 function sampleCanvasBackgroundColor(
   canvas: HTMLCanvasElement | null,
   pdfX: number,
   pdfY: number,
-  zoom: number
+  pdfHeight: number,
+  zoom: number,
+  textIsLight = false
 ): string {
-  if (!canvas) return '#ffffff';
+  const fallback = textIsLight ? '#1e293b' : '#ffffff';
+  if (!canvas) return fallback;
   try {
     const ctx = canvas.getContext('2d');
-    if (!ctx) return '#ffffff';
+    if (!ctx) return fallback;
     const dpr = window.devicePixelRatio || 1;
     const px = Math.max(0, Math.min(canvas.width - 1, Math.round((pdfX * zoom - 2) * dpr)));
-    const py = Math.max(0, Math.min(canvas.height - 1, Math.round((pdfY * zoom - 2) * dpr)));
+    const py = Math.max(0, Math.min(canvas.height - 1, Math.round(((pdfY + pdfHeight * 0.5) * zoom) * dpr)));
     const pixel = ctx.getImageData(px, py, 1, 1).data;
-    if (pixel[3] < 20) return '#ffffff';
+    if (pixel[3] < 20) return fallback;
+    const luminance = 0.299 * pixel[0] + 0.587 * pixel[1] + 0.114 * pixel[2];
+    if (!textIsLight && luminance < 140) return '#ffffff';
     return `rgb(${pixel[0]}, ${pixel[1]}, ${pixel[2]})`;
   } catch {
-    return '#ffffff';
+    return fallback;
   }
 }
 
@@ -320,7 +338,14 @@ export const PdfTextEditorLayer: React.FC<PdfTextEditorLayerProps> = ({
             ? blk.origRects
             : [{ x: blk.origX, y: blk.origY, width: blk.origWidth, height: blk.origHeight }]
           ).map((r, idx) => {
-            const bgColor = sampleCanvasBackgroundColor(baseCanvasRef.current, r.x, r.y, zoom);
+            const bgColor = sampleCanvasBackgroundColor(
+              baseCanvasRef.current,
+              r.x,
+              r.y,
+              r.height,
+              zoom,
+              isLightHexColor(blk.color)
+            );
             return (
               <div
                 key={`mask_${blk.id}_${idx}`}
@@ -357,7 +382,9 @@ export const PdfTextEditorLayer: React.FC<PdfTextEditorLayerProps> = ({
             }}
             className={`absolute transition-shadow ${
               isEditing
-                ? 'z-30 ring-2 ring-blue-600 bg-white/90 dark:bg-neutral-900/85 shadow-md pointer-events-auto'
+                ? `z-30 ring-2 ring-blue-600 ${
+                    isLightHexColor(blk.color) ? 'bg-slate-800/95' : 'bg-white/95'
+                  } shadow-md pointer-events-auto`
                 : isSelected
                 ? 'z-30 ring-1.5 ring-blue-500 bg-blue-500/5 pointer-events-auto'
                 : isHovered
